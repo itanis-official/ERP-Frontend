@@ -1,0 +1,199 @@
+import React, { useState } from 'react'
+import {
+  FolderKanban,
+  CheckSquare,
+  Clock,
+  TrendingUp,
+  Briefcase,
+  LogOut,
+  Bell,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react'
+
+export type ViewType = 'projects' | 'tasks' | 'timesheet' | 'performance'
+interface UserData {
+  name: string
+  email: string
+  role: 'admin' | 'member'
+}
+interface SidebarProps {
+  activeView: ViewType
+  onViewChange: (view: ViewType) => void
+  user: UserData
+  onLogout: () => void
+  notificationsCount?: number
+  defaultCollapsed?: boolean
+  onCollapsedChange?: (collapsed: boolean) => void
+}
+export function Sidebar({
+  activeView,
+  onViewChange,
+  user,
+  onLogout,
+  notificationsCount = 0,
+  defaultCollapsed = false,
+  onCollapsedChange,
+}: SidebarProps) {
+  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed)
+  const navItems = [
+    {
+      id: 'projects',
+      label: 'Projects',
+      icon: FolderKanban,
+    },
+    {
+      id: 'tasks',
+      label: 'Tasks',
+      icon: CheckSquare,
+    },
+    {
+      id: 'timesheet',
+      label: 'Calendrier',
+      icon: Clock,
+    },
+    {
+      id: 'performance',
+      label: 'Performance',
+      icon: TrendingUp,
+    },
+  ] as const
+  const toggleSidebar = () => {
+    const newState = !isCollapsed
+    setIsCollapsed(newState)
+    onCollapsedChange?.(newState)
+  }
+  return (
+    <>
+      
+      <button
+        onClick={toggleSidebar}
+        className={`fixed top-4 z-20 bg-white border border-gray-200 rounded-full p-2 shadow-md hover:shadow-lg transition-all duration-300 ${isCollapsed ? 'left-20' : 'left-64'}`}
+        style={{
+          transform: 'translateX(-50%)',
+        }}
+      >
+        {isCollapsed ? (
+          <ChevronRight className="h-4 w-4 text-[#ef7c21]" />
+        ) : (
+          <ChevronLeft className="h-4 w-4 text-[#ef7c21]" />
+        )}
+      </button>
+
+      <aside
+        className={`bg-white flex flex-col h-screen fixed left-0 top-0 z-10 font-['Poppins'] shadow-lg transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}
+      >
+    
+        <div
+          className={`h-16 flex items-center border-b border-gray-200 ${isCollapsed ? 'justify-center px-0' : 'px-6'}`}
+        >
+          <Briefcase className="h-6 w-6 text-[#ef7c21] flex-shrink-0" />
+          {!isCollapsed && (
+            <span className="font-semibold text-gray-800 text-lg tracking-tight ml-3">
+              Project<span className="text-[#ef7c21]">Flow</span>
+            </span>
+          )}
+        </div>
+
+    
+        <nav className="flex-1 overflow-y-auto py-6 px-2 space-y-1">
+          {navItems.map((item) => {
+            const isActive = activeView === item.id
+            const Icon = item.icon
+            return (
+              <button
+                key={item.id}
+                onClick={() => onViewChange(item.id as ViewType)}
+                className={`w-full flex items-center rounded-lg transition-all duration-200 group ${isCollapsed ? 'justify-center px-0 py-3' : 'px-3 py-2.5'} ${isActive ? 'bg-[#ef7c21]/10 text-[#ef7c21]' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
+                title={isCollapsed ? item.label : ''}
+              >
+                <Icon
+                  className={`h-5 w-5 flex-shrink-0 ${isActive ? 'text-[#ef7c21]' : 'text-gray-400 group-hover:text-gray-600'} ${!isCollapsed && 'mr-3'}`}
+                />
+                {!isCollapsed && (
+                  <span className="text-sm font-medium truncate">
+                    {item.label}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </nav>
+
+        <div className="border-t border-gray-200">
+
+          <div
+            className={`border-b border-gray-200 ${isCollapsed ? 'px-2 py-4' : 'px-4 py-3'}`}
+          >
+            <div
+              className={`flex items-center text-gray-600 hover:text-[#ef7c21] cursor-pointer transition-colors ${isCollapsed ? 'justify-center' : 'justify-between'}`}
+            >
+              <div
+                className={`flex items-center text-sm font-medium ${isCollapsed ? 'flex-col gap-1' : ''}`}
+              >
+                <Bell className={`h-4 w-4 ${isCollapsed ? '' : 'mr-2'}`} />
+                {!isCollapsed && 'Notifications'}
+              </div>
+              {notificationsCount > 0 && (
+                <span
+                  className={`bg-[#ef7c21] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full ${isCollapsed ? 'absolute -mt-6 ml-4' : ''}`}
+                >
+                  {notificationsCount}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className={`p-4 ${isCollapsed ? 'px-2' : ''}`}>
+            <div
+              className={`flex items-center ${isCollapsed ? 'flex-col' : ''}`}
+            >
+              <div
+                className={`h-9 w-9 rounded-full bg-[#ef7c21]/10 flex items-center justify-center text-[#ef7c21] font-medium text-sm border border-[#ef7c21]/20 flex-shrink-0`}
+              >
+                {user.name
+                  .split(' ')
+                  .map((n) => n[0])
+                  .join('')}
+              </div>
+
+              {!isCollapsed && (
+                <>
+                  <div className="ml-3 overflow-hidden flex-1">
+                    <p className="text-sm font-medium text-gray-800 truncate">
+                      {user.name}
+                    </p>
+                    <p className="text-xs text-gray-500 truncate capitalize">
+                      {user.role === 'admin' ? 'Chef de projet' : 'Membre'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={onLogout}
+                    className="ml-auto text-gray-400 hover:text-[#ef7c21] transition-colors"
+                    title="Déconnexion"
+                  >
+                    <LogOut className="h-5 w-5" />
+                  </button>
+                </>
+              )}
+
+              {isCollapsed && (
+                <button
+                  onClick={onLogout}
+                  className="mt-2 text-gray-400 hover:text-[#ef7c21] transition-colors"
+                  title="Déconnexion"
+                >
+                  <LogOut className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div
+        className={`transition-all duration-300 ${isCollapsed ? 'ml-20' : 'ml-64'}`}
+      />
+    </>
+  )
+}
