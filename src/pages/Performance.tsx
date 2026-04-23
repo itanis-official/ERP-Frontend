@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef, useTransition } from 'react'
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
@@ -17,285 +17,342 @@ import {
   Clock,
   Loader2,
   RefreshCw,
+  Bell,
+  CheckCheck,
 } from 'lucide-react'
 import {
   getSubTasksToTest,
   validateSubTask,
   rejectSubTask,
-  getValidationHistory,
-  type ValidationHistory,
+  type SubTaskToTest,
 } from '../services/validatorService'
 
-type SubTaskStatus = 'not-started' | 'in-progress' | 'paused' | 'completed' | 'to-test' | 'validated' | 'rejected'
-type Priority = 'low' | 'medium' | 'high' | 'urgent'
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ValidationHistoryItem {
+  id: string
+  subTaskId: number
+  subTaskTitle: string
+  taskTitle: string
+  project: string
+  phase: string
+  validatedBy: string
+  validatedAt: Date
+  status: 'validated' | 'rejected'
+  comments: string
+}
 
 interface SubTask {
   id: string
   title: string
-  description?: string
-  status: SubTaskStatus
-  priority: Priority
-  assignee: string
-  tester: string
-  startDate: string
-  endDate: string
   estimatedHours: number
-  consumedHours: number
-  progress: number
   tacheTitre?: string
   phase?: string
   projetNom?: string
 }
 
 interface ValidatorViewProps {
-  validatorId?: string
   validatorName?: string
   projetId?: number
 }
 
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+const HISTORY_KEY = 'validator_history'
+const REFRESH_INTERVAL = 10_000 // 10 s
+
+// ─── Utilitaires ──────────────────────────────────────────────────────────────
 
 const formatDateTime = (date: Date | string) => {
   const d = typeof date === 'string' ? new Date(date) : date
   return d.toLocaleDateString('fr-FR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
   })
 }
 
-export function ValidatorView({
-  validatorName = 'Karim El Idrissi',
-  projetId,
-}: ValidatorViewProps) {
-  // États
-  const [subTasks, setSubTasks] = useState<SubTask[]>([])
-  const [history, setHistory] = useState<ValidationHistory[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [selectedSubTask, setSelectedSubTask] = useState<SubTask | null>(null)
-  const [viewMode, setViewMode] = useState<'queue' | 'history' | 'stats'>('queue')
-  const [searchQuery, setSearchQuery] = useState('')
+const loadHistoryFromStorage = (): ValidationHistoryItem[] => {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    if (!raw) return []
+    return (JSON.parse(raw) as any[]).map(item => ({
+      ...item,
+      validatedAt: new Date(item.validatedAt),
+    }))
+  } catch { return [] }
+}
+
+const saveHistoryToStorage = (h: ValidationHistoryItem[]) => {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)) } catch {}
+}
+
+// ─── Composant principal ──────────────────────────────────────────────────────
+
+export function ValidatorView({ validatorName = 'Validateur', projetId }: ValidatorViewProps) {
+
+  // ── State ────────────────────────────────────────────────────────────────
+  const [subTasks, setSubTasks]             = useState<SubTask[]>([])
+  const [history, setHistory]               = useState<ValidationHistoryItem[]>(() => loadHistoryFromStorage())
+  const [isLoading, setIsLoading]           = useState(true)
+  const [error, setError]                   = useState<string | null>(null)
+  const [selectedId, setSelectedId]         = useState<string | null>(null)
+  const [viewMode, setViewMode]             = useState<'queue' | 'history' | 'stats'>('queue')
+  const [searchQuery, setSearchQuery]       = useState('')
   const [showRejectForm, setShowRejectForm] = useState(false)
-  const [rejectReason, setRejectReason] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [rejectReason, setRejectReason]     = useState('')
+  // ← CLÉS : deux états séparés pour éviter le blocage visuel
+  const [submittingId, setSubmittingId]     = useState<string | null>(null)
+  const [autoRefresh, setAutoRefresh]       = useState(true)
+  const [lastRefresh, setLastRefresh]       = useState(new Date())
+  // Toast de confirmation
+  const [toast, setToast]                   = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
 
-  const isLoadingRef = useRef(false)
+  const isLoadingRef  = useRef(false)
+  const intervalRef   = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // ========== CHARGER LES TÂCHES À TESTER ==========
-  const loadSubTasksToTest = useCallback(async () => {
+  // ── Toast ────────────────────────────────────────────────────────────────
+  const showToast = useCallback((msg: string, type: 'ok' | 'err') => {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }, [])
+
+  // ── Chargement des tâches ────────────────────────────────────────────────
+  const loadTasks = useCallback(async (showSpinner = true) => {
     if (isLoadingRef.current) return
     isLoadingRef.current = true
-    setIsLoading(true)
+    if (showSpinner) setIsLoading(true)
     setError(null)
 
     try {
       const data = await getSubTasksToTest(projetId)
-      console.log('Tâches à tester reçues:', data)
-
-      const transformedTasks: SubTask[] = data.map(st => ({
-        id: st.id.toString(),
-        title: st.titre,
-        status: 'to-test',
-        priority: 'medium',
-        assignee: 'Développeur',
-        tester: validatorName,
-        startDate: new Date().toISOString(),
-        endDate: new Date().toISOString(),
-        estimatedHours: st.dureeEstimeeHeures,
-        consumedHours: 0,
-        progress: 0,
-        tacheTitre: st.tache,
-        phase: st.phase,
-        projetNom: st.projet,
-      }))
-
-      setSubTasks(transformedTasks)
-    } catch (err) {
-      setError('Erreur lors du chargement des tâches à tester')
-      console.error(err)
+      setSubTasks(
+        data.map(st => ({
+          id: st.id.toString(),
+          title: st.titre,
+          estimatedHours: st.dureeEstimeeHeures,
+          tacheTitre: st.tache,
+          phase: st.phase,
+          projetNom: st.projet,
+        }))
+      )
+      setLastRefresh(new Date())
+    } catch {
+      setError('Impossible de charger les tâches à tester.')
     } finally {
-      setIsLoading(false)
+      if (showSpinner) setIsLoading(false)
       isLoadingRef.current = false
     }
-  }, [projetId, validatorName])
+  }, [projetId])
 
-  // ========== CHARGER L'HISTORIQUE ==========
-  const loadHistory = useCallback(async () => {
-    try {
-      const data = await getValidationHistory()
-      setHistory(data)
-    } catch (err) {
-      console.error('Erreur chargement historique:', err)
+  // ── Ajouter à l'historique ────────────────────────────────────────────────
+  const pushHistory = useCallback((
+    task: SubTask,
+    status: 'validated' | 'rejected',
+    comments: string
+  ) => {
+    const item: ValidationHistoryItem = {
+      id: `VH-${Date.now()}`,
+      subTaskId: parseInt(task.id),
+      subTaskTitle: task.title,
+      taskTitle: task.tacheTitre || 'Tâche',
+      project: task.projetNom || 'Projet',
+      phase: task.phase || '-',
+      validatedBy: validatorName,
+      validatedAt: new Date(),
+      status,
+      comments,
     }
-  }, [])
+    setHistory(prev => {
+      const next = [item, ...prev]
+      saveHistoryToStorage(next)
+      return next
+    })
+  }, [validatorName])
 
-  // ========== VALIDER UNE TÂCHE ==========
-  const handleValidate = useCallback(async (subTaskId: string) => {
-    if (isSubmitting) return
-    setIsSubmitting(true)
+  // ── VALIDER — mise à jour instantanée de l'UI ─────────────────────────────
+  const handleValidate = useCallback(async (task: SubTask) => {
+    if (submittingId) return
+    setSubmittingId(task.id)
+
+    // 1. Mise à jour OPTIMISTE immédiate
+    setSubTasks(prev => prev.filter(s => s.id !== task.id))
+    setSelectedId(null)
+    setShowRejectForm(false)
 
     try {
-      await validateSubTask(parseInt(subTaskId))
-      
-      // Ajouter à l'historique localement
-      const validatedTask = subTasks.find(s => s.id === subTaskId)
-      if (validatedTask) {
-        const newHistory: ValidationHistory = {
-          id: `VH-${Date.now()}`,
-          subTaskId: parseInt(subTaskId),
-          subTaskTitle: validatedTask.title,
-          taskTitle: validatedTask.tacheTitre || 'Tâche',
-          project: validatedTask.projetNom || 'Projet',
-          validatedBy: validatorName,
-          validatedAt: new Date(),
-          status: 'validated',
-          comments: 'Validé avec succès',
-        }
-        setHistory(prev => [newHistory, ...prev])
-      }
-
-      // Supprimer de la liste
-      setSubTasks(prev => prev.filter(s => s.id !== subTaskId))
-      setSelectedSubTask(null)
-    } catch (err) {
-      setError('Erreur lors de la validation')
-      console.error(err)
+      await validateSubTask(parseInt(task.id))
+      pushHistory(task, 'validated', 'Validé avec succès')
+      showToast(`✅ "${task.title}" validée`, 'ok')
+      window.dispatchEvent(new CustomEvent('task-validated', { detail: { subTaskId: task.id } }))
+    } catch {
+      // 2. Rollback si erreur API
+      setSubTasks(prev => [task, ...prev])
+      setError('Erreur lors de la validation. Réessayez.')
+      showToast('Erreur lors de la validation', 'err')
     } finally {
-      setIsSubmitting(false)
+      setSubmittingId(null)
     }
-  }, [subTasks, validatorName, isSubmitting])
+  }, [submittingId, pushHistory, showToast])
 
-  // ========== REJETER UNE TÂCHE ==========
-  const handleReject = useCallback(async (subTaskId: string, reason: string) => {
-    if (isSubmitting || !reason.trim()) return
-    setIsSubmitting(true)
+  // ── REJETER — mise à jour instantanée de l'UI ─────────────────────────────
+  const handleReject = useCallback(async (task: SubTask, reason: string) => {
+    if (submittingId || !reason.trim()) return
+    setSubmittingId(task.id)
+
+    // 1. Mise à jour OPTIMISTE immédiate
+    setSubTasks(prev => prev.filter(s => s.id !== task.id))
+    setSelectedId(null)
+    setShowRejectForm(false)
+    setRejectReason('')
 
     try {
-      await rejectSubTask(parseInt(subTaskId), reason)
-      
-      // Ajouter à l'historique localement
-      const rejectedTask = subTasks.find(s => s.id === subTaskId)
-      if (rejectedTask) {
-        const newHistory: ValidationHistory = {
-          id: `VH-${Date.now()}`,
-          subTaskId: parseInt(subTaskId),
-          subTaskTitle: rejectedTask.title,
-          taskTitle: rejectedTask.tacheTitre || 'Tâche',
-          project: rejectedTask.projetNom || 'Projet',
-          validatedBy: validatorName,
-          validatedAt: new Date(),
-          status: 'rejected',
-          comments: reason,
-        }
-        setHistory(prev => [newHistory, ...prev])
-      }
-
-      // Supprimer de la liste
-      setSubTasks(prev => prev.filter(s => s.id !== subTaskId))
-      setSelectedSubTask(null)
-      setShowRejectForm(false)
-      setRejectReason('')
-    } catch (err) {
-      setError('Erreur lors du rejet')
-      console.error(err)
+      await rejectSubTask(parseInt(task.id), reason)
+      pushHistory(task, 'rejected', reason)
+      showToast(`❌ "${task.title}" rejetée`, 'ok')
+      window.dispatchEvent(new CustomEvent('task-rejected', { detail: { subTaskId: task.id, reason } }))
+    } catch {
+      // 2. Rollback si erreur API
+      setSubTasks(prev => [task, ...prev])
+      setError('Erreur lors du rejet. Réessayez.')
+      showToast('Erreur lors du rejet', 'err')
     } finally {
-      setIsSubmitting(false)
+      setSubmittingId(null)
     }
-  }, [subTasks, validatorName, isSubmitting])
+  }, [submittingId, pushHistory, showToast])
 
-  // ========== RÉINITIALISER ==========
+  // ── Sélection d'une tâche ─────────────────────────────────────────────────
+  const selectTask = (id: string) => {
+    setSelectedId(prev => prev === id ? null : id)
+    setShowRejectForm(false)
+    setRejectReason('')
+  }
+
+  // ── Refresh manuel ────────────────────────────────────────────────────────
   const handleRefresh = useCallback(() => {
-    loadSubTasksToTest()
-    loadHistory()
-  }, [loadSubTasksToTest, loadHistory])
+    loadTasks(true)
+    setHistory(loadHistoryFromStorage())
+  }, [loadTasks])
 
-  // ========== USE EFFECTS ==========
+  // ── Effacer l'historique ──────────────────────────────────────────────────
+  const clearHistory = () => {
+    if (!window.confirm("Effacer tout l'historique ?")) return
+    setHistory([])
+    localStorage.removeItem(HISTORY_KEY)
+  }
+
+  // ── Effects ───────────────────────────────────────────────────────────────
+  useEffect(() => { loadTasks(true) }, [loadTasks])
+
+  // Auto-refresh
   useEffect(() => {
-    loadSubTasksToTest()
-    loadHistory()
-  }, [loadSubTasksToTest, loadHistory])
+    if (!autoRefresh) { if (intervalRef.current) clearInterval(intervalRef.current); return }
+    intervalRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') loadTasks(false)
+    }, REFRESH_INTERVAL)
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
+  }, [autoRefresh, loadTasks])
 
-  // ========== STATISTIQUES ==========
-  const stats = useMemo(() => {
-    const validated = history.filter((h) => h.status === 'validated').length
-    const rejected = history.filter((h) => h.status === 'rejected').length
-    return {
-      totalToTest: subTasks.length,
-      validated,
-      rejected,
-      successRate:
-        validated + rejected > 0
-          ? Math.round((validated / (validated + rejected)) * 100)
-          : 0,
-    }
-  }, [subTasks, history])
+  // Refresh quand l'onglet redevient visible
+  useEffect(() => {
+    const fn = () => { if (document.visibilityState === 'visible') loadTasks(false) }
+    document.addEventListener('visibilitychange', fn)
+    return () => document.removeEventListener('visibilitychange', fn)
+  }, [loadTasks])
 
-  // ========== FILTRAGE ==========
-  const filteredSubTasks = useMemo(() => {
+  // Écouter des événements externes
+  useEffect(() => {
+    const fn = () => loadTasks(false)
+    window.addEventListener('project-updated', fn)
+    window.addEventListener('task-status-changed', fn)
+    return () => { window.removeEventListener('project-updated', fn); window.removeEventListener('task-status-changed', fn) }
+  }, [loadTasks])
+
+  // ── Mémos ─────────────────────────────────────────────────────────────────
+  const filteredTasks = useMemo(() => {
     if (!searchQuery) return subTasks
     const q = searchQuery.toLowerCase()
-    return subTasks.filter(
-      (st) =>
-        st.title.toLowerCase().includes(q) ||
-        st.tacheTitre?.toLowerCase().includes(q) ||
-        st.projetNom?.toLowerCase().includes(q)
+    return subTasks.filter(st =>
+      st.title.toLowerCase().includes(q) ||
+      st.tacheTitre?.toLowerCase().includes(q) ||
+      st.projetNom?.toLowerCase().includes(q)
     )
   }, [subTasks, searchQuery])
 
-  // ========== RENDU ==========
-  if (isLoading) {
+  const stats = useMemo(() => {
+    const validated = history.filter(h => h.status === 'validated').length
+    const rejected  = history.filter(h => h.status === 'rejected').length
+    const total     = validated + rejected
+    return { totalToTest: subTasks.length, validated, rejected, totalProcessed: total, successRate: total > 0 ? Math.round((validated / total) * 100) : 0 }
+  }, [subTasks.length, history])
+
+  const selectedTask = useMemo(() => subTasks.find(s => s.id === selectedId) ?? null, [subTasks, selectedId])
+
+  // ── Rendu de chargement ───────────────────────────────────────────────────
+  if (isLoading && subTasks.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-[#ef7c21]" />
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-10 w-10 animate-spin text-[#ef7c21]" />
       </div>
     )
   }
 
+  // ── Rendu principal ───────────────────────────────────────────────────────
   return (
-    <div className="space-y-6 max-w-7xl mx-auto p-4">
+    <div className="space-y-6 max-w-7xl mx-auto p-4 relative">
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-[100] px-5 py-3 rounded-xl shadow-xl text-white text-sm font-medium transition-all animate-in slide-in-from-top-2 duration-300 ${
+          toast.type === 'ok' ? 'bg-green-600' : 'bg-red-600'
+        }`}>
+          {toast.msg}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-600 to-purple-400 flex items-center justify-center shadow-lg">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#ef7c21] to-[#ff9f4b] flex items-center justify-center shadow-lg">
             <CheckCircle2 className="h-6 w-6 text-white" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">VALIDATION</h1>
-            <p className="text-gray-500 text-sm mt-1">
-              {stats.totalToTest} tâches à tester
+            <p className="text-gray-500 text-sm mt-0.5 flex items-center gap-2">
+              <span>
+                {stats.totalToTest === 0
+                  ? 'Aucune tâche en attente'
+                  : `${stats.totalToTest} tâche${stats.totalToTest > 1 ? 's' : ''} à tester`}
+              </span>
+              {autoRefresh && (
+                <span className="text-xs text-green-600 flex items-center gap-1">
+                  <Bell className="h-3 w-3" /> Auto-refresh
+                </span>
+              )}
             </p>
           </div>
         </div>
+
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isLoading}
-            className="!px-2"
-            title="Rafraîchir"
-          >
-            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          </Button>
+          {/* Toggle auto-refresh */}
+          <button
+            onClick={() => setAutoRefresh(v => !v)}
+            title={autoRefresh ? "Désactiver l'auto-refresh" : "Activer l'auto-refresh"}
+            className={`p-2 rounded-lg border transition-all ${
+              autoRefresh ? 'bg-[#ef7c21] border-[#ef7c21] text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-[#ef7c21]'
+            }`}>
+            <RefreshCw className={`h-4 w-4 ${autoRefresh ? 'animate-spin' : ''}`} />
+          </button>
+          {/* Tabs vue */}
           <div className="flex bg-white rounded-lg border border-gray-200 p-1 shadow-sm">
-            {(
-              [
-                ['queue', List, "File d'attente"],
-                ['history', History, 'Historique'],
-                ['stats', BarChart3, 'Statistiques'],
-              ] as const
-            ).map(([mode, Icon, label]) => (
-              <button
-                key={mode}
-                onClick={() => setViewMode(mode as any)}
+            {([
+              ['queue',   List,    "File d'attente"],
+              ['history', History, 'Historique'],
+              ['stats',   BarChart3, 'Stats'],
+            ] as const).map(([mode, Icon, label]) => (
+              <button key={mode} onClick={() => setViewMode(mode as any)}
                 className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-1 ${
-                  viewMode === mode 
-                    ? 'bg-[#ef7c21] text-white shadow-md' 
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
+                  viewMode === mode ? 'bg-[#ef7c21] text-white shadow' : 'text-gray-600 hover:bg-gray-100'
+                }`}>
                 <Icon className="h-4 w-4" />
                 <span className="hidden sm:inline">{label}</span>
               </button>
@@ -304,274 +361,265 @@ export function ValidatorView({
         </div>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-red-800">
-            <AlertCircle className="h-5 w-5" />
-            <span>{error}</span>
-          </div>
-          <Button variant="ghost" size="sm" onClick={() => setError(null)}>
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2 text-red-700 text-sm"><AlertCircle className="h-5 w-5" />{error}</div>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600"><X className="h-4 w-4" /></button>
         </div>
       )}
 
-      {/* Queue View */}
+      {/* ==================== QUEUE ==================== */}
       {viewMode === 'queue' && (
         <Card className="overflow-hidden">
+          {/* Barre de recherche */}
           <div className="p-4 bg-gray-50/50 border-b border-gray-200">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
                 type="text"
                 placeholder="Rechercher par titre, tâche ou projet..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#ef7c21]"
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]"
               />
             </div>
           </div>
+
           <div className="p-6">
-            {filteredSubTasks.length === 0 ? (
-              <div className="text-center py-12">
-                <CheckCircle2 className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  Aucune tâche à tester
+            {/* Vide */}
+            {filteredTasks.length === 0 ? (
+              <div className="text-center py-16">
+                <CheckCheck className="h-14 w-14 text-green-400 mx-auto mb-4" />
+                <h3 className="text-lg font-semibold text-gray-800 mb-1">
+                  {searchQuery ? 'Aucun résultat' : 'Toutes les tâches sont traitées !'}
                 </h3>
-                <p className="text-gray-500">
-                  Toutes les tâches ont été validées ou rejetées.
+                <p className="text-gray-500 text-sm mb-4">
+                  {searchQuery ? 'Essayez un autre terme de recherche.' : 'Il n\'y a rien à valider pour le moment.'}
                 </p>
+                
               </div>
             ) : (
-              <div className="space-y-4">
-                {filteredSubTasks.map((subTask) => (
-                  <div
-                    key={subTask.id}
-                    className="border border-gray-200 rounded-lg overflow-hidden"
-                  >
-                    {selectedSubTask?.id === subTask.id ? (
-                      <Card className="overflow-hidden border-2 border-[#ef7c21]">
-                        <div className="bg-gradient-to-r from-[#ef7c21] to-[#ff9f4b] p-4 text-white">
-                          <h2 className="text-xl font-bold">{subTask.title}</h2>
-                          <p className="text-sm text-white/90 mt-1">
-                            Tâche: {subTask.tacheTitre || 'Non spécifié'} • Projet: {subTask.projetNom || 'Non spécifié'}
-                          </p>
-                        </div>
-                        <div className="p-4 border-b bg-gray-50">
-                          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-                            <div>
-                              <p className="text-xs text-gray-500">Phase</p>
-                              <p className="font-medium">{subTask.phase || '-'}</p>
+              <div className="space-y-3">
+                {filteredTasks.map(task => {
+                  const isSelected = selectedId === task.id
+                  const isThisSubmitting = submittingId === task.id
+
+                  return (
+                    <div key={task.id} className={`rounded-xl border-2 overflow-hidden transition-all duration-200 ${
+                      isSelected ? 'border-[#ef7c21] shadow-lg' : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                    }`}>
+                      {/* ── Résumé cliquable ── */}
+                      <div
+                        className={`p-4 cursor-pointer transition-colors ${isSelected ? 'bg-[#ef7c21]/5' : 'bg-white hover:bg-gray-50'}`}
+                        onClick={() => selectTask(task.id)}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                                À tester
+                              </span>
+                              <span className="text-sm font-semibold text-gray-900 truncate">
+                                {task.title}
+                              </span>
+                              {isThisSubmitting && <Loader2 className="h-3 w-3 animate-spin text-[#ef7c21]" />}
                             </div>
-                            <div>
-                              <p className="text-xs text-gray-500">Heures estimées</p>
-                              <p className="font-medium">{subTask.estimatedHours}h</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-500">Tester par</p>
-                              <p className="font-medium">{subTask.tester}</p>
+                            <p className="text-xs text-gray-500 mb-1.5">
+                              Tâche : <span className="font-medium">{task.tacheTitre || '-'}</span>
+                              {' • '}Projet : <span className="font-medium">{task.projetNom || '-'}</span>
+                            </p>
+                            <div className="flex items-center gap-4 text-xs text-gray-400">
+                              <span className="flex items-center gap-1"><User className="h-3 w-3" />Phase : {task.phase || '-'}</span>
+                              <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{task.estimatedHours}h estimées</span>
                             </div>
                           </div>
+                          <ChevronRight className={`h-5 w-5 text-gray-400 shrink-0 transition-transform ${isSelected ? 'rotate-90 text-[#ef7c21]' : ''}`} />
                         </div>
-                        <div className="p-4 bg-gray-50">
+                      </div>
+
+                      {/* ── Panel d'action (visible quand sélectionnée) ── */}
+                      {isSelected && (
+                        <div className="border-t border-[#ef7c21]/20 bg-white p-4 space-y-3">
                           {!showRejectForm ? (
-                            <div className="flex gap-3">
-                              <Button
-                                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                                onClick={() => handleValidate(subTask.id)}
-                                disabled={isSubmitting}
-                              >
-                                {isSubmitting ? (
-                                  <Loader2 className="h-4 w-4 animate-spin mx-auto" />
-                                ) : (
-                                  <>
-                                    <ThumbsUp className="h-4 w-4 mr-2" /> Valider
-                                  </>
-                                )}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                className="flex-1 border-red-300 text-red-700 hover:bg-red-50"
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              {/* VALIDER */}
+                              <button
+                                onClick={() => handleValidate(task)}
+                                disabled={!!submittingId}
+                                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                                  submittingId
+                                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                    : 'bg-green-600 hover:bg-green-700 text-white shadow-sm hover:shadow'
+                                }`}>
+                                {isThisSubmitting
+                                  ? <><Loader2 className="h-4 w-4 animate-spin" />Validation…</>
+                                  : <><ThumbsUp className="h-4 w-4" />Valider</>}
+                              </button>
+
+                              {/* REJETER */}
+                              <button
                                 onClick={() => setShowRejectForm(true)}
-                                disabled={isSubmitting}
-                              >
-                                <ThumbsDown className="h-4 w-4 mr-2" /> Rejeter
-                              </Button>
-                              <Button
-                                variant="outline"
-                                onClick={() => setSelectedSubTask(null)}
-                              >
+                                disabled={!!submittingId}
+                                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm border transition-all ${
+                                  submittingId
+                                    ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                    : 'border-red-300 text-red-700 hover:bg-red-50'
+                                }`}>
+                                <ThumbsDown className="h-4 w-4" />Rejeter
+                              </button>
+
+                              {/* FERMER */}
+                              <button
+                                onClick={() => setSelectedId(null)}
+                                className="px-4 py-2.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 text-sm font-medium">
                                 Fermer
-                              </Button>
+                              </button>
                             </div>
                           ) : (
+                            /* Formulaire de rejet */
                             <div className="space-y-3">
+                              <p className="text-sm font-medium text-gray-700">Raison du rejet :</p>
                               <textarea
                                 value={rejectReason}
-                                onChange={(e) => setRejectReason(e.target.value)}
-                                placeholder="Raison du rejet..."
+                                onChange={e => setRejectReason(e.target.value)}
+                                placeholder="Décrivez le problème constaté…"
                                 rows={3}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#ef7c21]"
                                 autoFocus
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
                               />
                               <div className="flex gap-2">
-                                <Button
-                                  variant="outline"
-                                  className="flex-1"
-                                  onClick={() => {
-                                    setShowRejectForm(false)
-                                    setRejectReason('')
-                                  }}
-                                  disabled={isSubmitting}
-                                >
+                                <button
+                                  onClick={() => { setShowRejectForm(false); setRejectReason('') }}
+                                  className="flex-1 px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 font-medium">
                                   Annuler
-                                </Button>
-                                <Button
-                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                                  onClick={() => handleReject(subTask.id, rejectReason)}
-                                  disabled={!rejectReason.trim() || isSubmitting}
-                                >
-                                  {isSubmitting ? (
-                                    <Loader2 className="h-4 w-4 animate-spin mx-auto" />
-                                  ) : (
-                                    'Confirmer le rejet'
-                                  )}
-                                </Button>
+                                </button>
+                                <button
+                                  onClick={() => handleReject(task, rejectReason)}
+                                  disabled={!rejectReason.trim() || !!submittingId}
+                                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                                    !rejectReason.trim() || submittingId
+                                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                      : 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
+                                  }`}>
+                                  {isThisSubmitting
+                                    ? <span className="flex items-center justify-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Rejet…</span>
+                                    : 'Confirmer le rejet'}
+                                </button>
                               </div>
                             </div>
                           )}
                         </div>
-                      </Card>
-                    ) : (
-                      <div
-                        className="p-4 bg-white hover:bg-gray-50 cursor-pointer transition-colors"
-                        onClick={() => {
-                          setSelectedSubTask(subTask)
-                          setShowRejectForm(false)
-                          setRejectReason('')
-                        }}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <Badge variant="neutral" className="bg-purple-100 text-purple-700">
-                                À tester
-                              </Badge>
-                              <span className="text-sm font-medium text-gray-900">
-                                {subTask.title}
-                              </span>
-                            </div>
-                            <p className="text-xs text-gray-500 mb-2">
-                              Tâche: {subTask.tacheTitre || '-'} • Projet: {subTask.projetNom || '-'}
-                            </p>
-                            <div className="flex items-center gap-4 text-xs text-gray-500">
-                              <span className="flex items-center gap-1">
-                                <User className="h-3 w-3" />
-                                Phase: {subTask.phase || '-'}
-                              </span>
-                              <span className="flex items-center gap-1">
-                                <Clock className="h-3 w-3" />
-                                {subTask.estimatedHours}h estimées
-                              </span>
-                            </div>
-                          </div>
-                          <ChevronRight className="h-5 w-5 text-gray-400" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
         </Card>
       )}
 
-      {/* History View */}
+      {/* ==================== HISTORIQUE ==================== */}
       {viewMode === 'history' && (
         <Card className="p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-semibold text-gray-900">
+              Historique des validations
+              {history.length > 0 && (
+                <span className="ml-2 text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">{history.length}</span>
+              )}
+            </h3>
+            {history.length > 0 && (
+              <button onClick={clearHistory} className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-medium">
+                <X className="h-3.5 w-3.5" /> Effacer tout
+              </button>
+            )}
+          </div>
+
           {history.length === 0 ? (
             <div className="text-center py-12">
               <History className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
-                Aucun historique
-              </h3>
-              <p className="text-gray-500">
-                Aucune validation ou rejet n'a été effectué pour le moment.
-              </p>
+              <p className="text-gray-500 text-sm">Aucune validation ou rejet effectué pour le moment.</p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {history.map((item) => (
-                <Card
-                  key={item.id}
-                  className="p-4 hover:shadow-md transition-shadow"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
+            <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
+              {history.map(item => (
+                <div key={item.id} className={`p-4 rounded-xl border-l-4 bg-white shadow-sm ${
+                  item.status === 'validated' ? 'border-green-500' : 'border-red-500'
+                }`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <Badge
-                          variant={item.status === 'validated' ? 'success' : 'danger'}
-                        >
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                          item.status === 'validated' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                          {item.status === 'validated' ? <ThumbsUp className="h-3 w-3" /> : <ThumbsDown className="h-3 w-3" />}
                           {item.status === 'validated' ? 'Validé' : 'Rejeté'}
-                        </Badge>
-                        <span className="text-sm font-medium">
-                          {item.subTaskTitle}
                         </span>
+                        <span className="text-sm font-semibold text-gray-800 truncate">{item.subTaskTitle}</span>
                       </div>
-                      <p className="text-xs text-gray-500">
-                        {item.taskTitle} • {item.project}
+                      <p className="text-xs text-gray-500 mb-1.5">
+                        {item.taskTitle} • {item.project} • Phase : {item.phase}
                       </p>
                       {item.comments && (
-                        <p className="text-sm text-gray-700 bg-gray-50 p-2 rounded-lg mt-2">
+                        <p className="text-xs text-gray-600 bg-gray-50 border border-gray-100 px-3 py-2 rounded-lg italic">
                           "{item.comments}"
                         </p>
                       )}
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">
-                        {formatDateTime(item.validatedAt)}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        par {item.validatedBy}
-                      </p>
+                    <div className="text-right shrink-0">
+                      <p className="text-xs text-gray-500">{formatDateTime(item.validatedAt)}</p>
+
                     </div>
                   </div>
-                </Card>
+                </div>
               ))}
             </div>
           )}
         </Card>
       )}
 
-      {/* Stats View */}
+      {/* ==================== STATS ==================== */}
       {viewMode === 'stats' && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="p-4 text-center">
-            <p className="text-xs text-gray-500">À tester</p>
-            <p className="text-2xl font-bold text-[#ef7c21]">
-              {stats.totalToTest}
-            </p>
-          </Card>
-          <Card className="p-4 text-center">
-            <p className="text-xs text-gray-500">Validés</p>
-            <p className="text-2xl font-bold text-green-600">
-              {stats.validated}
-            </p>
-          </Card>
-          <Card className="p-4 text-center">
-            <p className="text-xs text-gray-500">Rejetés</p>
-            <p className="text-2xl font-bold text-red-600">
-              {stats.rejected}
-            </p>
-          </Card>
-          <Card className="p-4 text-center">
-            <p className="text-xs text-gray-500">Taux de succès</p>
-            <p className="text-2xl font-bold text-blue-600">
-              {stats.successRate}%
-            </p>
-          </Card>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'À tester',      value: stats.totalToTest,    color: 'text-[#ef7c21]', bg: 'bg-orange-50',  border: 'border-orange-200' },
+              { label: 'Validées',       value: stats.validated,      color: 'text-green-600', bg: 'bg-green-50',   border: 'border-green-200' },
+              { label: 'Rejetées',       value: stats.rejected,       color: 'text-red-600',   bg: 'bg-red-50',     border: 'border-red-200' },
+              { label: 'Taux de succès', value: `${stats.successRate}%`, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200' },
+            ].map(({ label, value, color, bg, border }) => (
+              <Card key={label} className={`p-5 text-center border ${border} ${bg}`}>
+                <p className="text-xs text-gray-500 mb-1">{label}</p>
+                <p className={`text-3xl font-bold ${color}`}>{value}</p>
+              </Card>
+            ))}
+          </div>
+
+          {/* Barre de progression globale */}
+          {stats.totalProcessed > 0 && (
+            <Card className="p-5">
+              <p className="text-sm font-medium text-gray-700 mb-3">
+                Répartition des {stats.totalProcessed} décisions
+              </p>
+              <div className="flex rounded-full overflow-hidden h-4">
+                <div
+                  className="bg-green-500 transition-all"
+                  style={{ width: `${(stats.validated / stats.totalProcessed) * 100}%` }}
+                  title={`${stats.validated} validées`}
+                />
+                <div
+                  className="bg-red-500 transition-all"
+                  style={{ width: `${(stats.rejected / stats.totalProcessed) * 100}%` }}
+                  title={`${stats.rejected} rejetées`}
+                />
+              </div>
+              <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-green-500 inline-block" />{stats.validated} validées</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 inline-block" />{stats.rejected} rejetées</span>
+              </div>
+            </Card>
+          )}
         </div>
       )}
     </div>

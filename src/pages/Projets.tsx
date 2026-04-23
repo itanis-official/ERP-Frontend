@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useState, useCallback } from "react"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
@@ -8,7 +8,6 @@ import {
   Search,
   Eye,
   Pencil,
-  Trash2,
   Calendar,
   FolderOpen,
   Activity,
@@ -20,11 +19,11 @@ import {
   ChevronRight,
   ArrowUpDown,
   MapPin,
-  Layers,
   Clock,
   TrendingUp,
   Filter,
   X,
+  RefreshCw,
 } from "lucide-react"
 import { getMesProjetsChef } from "../services/projectService"
 
@@ -35,6 +34,13 @@ interface Phase {
   id: string
   typePhase: string
   statut: string
+  taches?: {
+    id: string
+    sousTaches?: {
+      id: string
+      statut: string
+    }[]
+  }[]
 }
 
 interface Projet {
@@ -54,8 +60,6 @@ interface Projet {
     id: number
     nom: string
   }
-
-  // ✅ AJOUT ICI
   groupeEquipe?: {
     id: number
     nom: string
@@ -83,29 +87,47 @@ const mapProjectFromApi = (p: any): Projet => {
     nom: p.nom,
     description: p.description,
     lieu: p.lieu,
-    dateDebut: p.dateDebut.split("T")[0],
-    dateFinPrevue: p.dateFinPrevue.split("T")[0],
+    dateDebut: p.dateDebut?.split("T")[0] || "",
+    dateFinPrevue: p.dateFinPrevue?.split("T")[0] || "",
     dateFinReelle: p.dateFinReelle ? p.dateFinReelle.split("T")[0] : undefined,
-    budgetEstime: p.budgetEstime,
+    budgetEstime: p.budgetEstime || 0,
     budgetReel: p.budgetReel,
-    typeProjet: p.typeProjet,
+    typeProjet: p.typeProjet || "Développement Web",
     statut: mapStatut[p.statut] || "Planifié",
     phases: p.phases || [],
     client: p.client,
-    groupeEquipe: p.groupeEquipe // ✅ AJOUT IMPORTANT
+    groupeEquipe: p.groupeEquipe
   }
 }
 
 // ================= UTILS =================
-const calculateProgress = (phases: Phase[]) => {
+const calculateProgress = (phases: any[]) => {
   if (!phases || phases.length === 0) return 0
 
-  const done = phases.filter(p => {
-    const statut = p.statut.toLowerCase()
-    return statut === "terminée" || statut === "terminee" || statut === "terminé"
-  }).length
+  let totalSousTaches = 0
+  let validatedSousTaches = 0
 
-  return Math.round((done / phases.length) * 100)
+  phases.forEach(phase => {
+    ;(phase.taches || []).forEach((tache: any) => {
+      ;(tache.sousTaches || []).forEach((st: any) => {
+        totalSousTaches++
+        const s = (st.statut || '').toLowerCase()
+        if (s === 'validee' || s === 'validée') {
+          validatedSousTaches++
+        }
+      })
+    })
+  })
+
+  if (totalSousTaches === 0) {
+    const done = phases.filter(p => {
+      const statut = (p.statut || '').toLowerCase()
+      return statut === 'terminée' || statut === 'terminee' || statut === 'terminé'
+    }).length
+    return Math.round((done / phases.length) * 100)
+  }
+
+  return Math.round((validatedSousTaches / totalSousTaches) * 100)
 }
 
 const getStatusVariant = (s: ProjectStatut) => {
@@ -140,15 +162,26 @@ const getProgressColor = (progress: number) => {
   return 'bg-red-500'
 }
 
+// Types pour les filtres
+type FiltreTypeProjet = 'all' | 'Développement Web' | 'Développement Mobile' | 'Design UI/UX' | 'Consulting' | 'IT'
+type FiltreBudget = 'all' | '< 50k' | '50k - 100k' | '100k - 200k' | '> 200k'
+type FiltreDate = 'all' | 'ce-mois' | 'ce-trimestre' | 'cette-annee' | 'annee-passee'
+
 export default function ProjectsView() {
   const [projects, setProjects] = useState<Projet[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<ProjectStatut | "All">("All")
+  
+  // Nouveaux filtres
+  const [typeProjetFilter, setTypeProjetFilter] = useState<FiltreTypeProjet>('all')
+  const [budgetFilter, setBudgetFilter] = useState<FiltreBudget>('all')
+  const [dateFilter, setDateFilter] = useState<FiltreDate>('all')
+  
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid")
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
- const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
-  const [showNewProject, setShowNewProject] = useState(false)
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(9)
   const [sortField, setSortField] = useState<string | null>(null)
@@ -156,19 +189,60 @@ export default function ProjectsView() {
   const [showFilters, setShowFilters] = useState(false)
 
   // ================= FETCH =================
-  useEffect(() => {
-    const fetchProjects = async () => {
-      try {
-        const data = await getMesProjetsChef()
-        setProjects(data.map(mapProjectFromApi))
-      } catch (e) {
-        console.error(e)
-      } finally {
-        setLoading(false)
-      }
+  const fetchProjects = useCallback(async () => {
+    try {
+      setRefreshing(true)
+      const data = await getMesProjetsChef()
+      setProjects(data.map(mapProjectFromApi))
+    } catch (e) {
+      console.error("Erreur lors du chargement des projets:", e)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
     }
-    fetchProjects()
   }, [])
+
+  // ================= RAFRAÎCHISSEMENT AUTOMATIQUE =================
+  
+  useEffect(() => {
+    fetchProjects()
+  }, [fetchProjects])
+
+  const handleVisibilityChange = useCallback(() => {
+    if (document.visibilityState === 'visible') {
+      fetchProjects()
+    }
+  }, [fetchProjects])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchProjects()
+      }
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [fetchProjects])
+
+  useEffect(() => {
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    const handleProjectUpdate = () => fetchProjects()
+    window.addEventListener('project-updated', handleProjectUpdate)
+    window.addEventListener('project-deleted', handleProjectUpdate)
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('project-updated', handleProjectUpdate)
+      window.removeEventListener('project-deleted', handleProjectUpdate)
+    }
+  }, [fetchProjects, handleVisibilityChange])
+
+  useEffect(() => {
+    if (!editingProjectId && !selectedProjectId && !loading) {
+      fetchProjects()
+    }
+  }, [editingProjectId, selectedProjectId, loading, fetchProjects])
+
+
 
   // ================= STATS =================
   const active = projects.filter(p => p.statut === 'En cours').length
@@ -176,16 +250,68 @@ export default function ProjectsView() {
   const planned = projects.filter(p => p.statut === 'Planifié').length
   const delayed = projects.filter(p => p.statut === 'En retard').length
 
-  // ================= FILTER =================
+  // ================= FILTRES AMÉLIORÉS =================
   const filteredProjects = projects.filter(p => {
+    // Filtre recherche
     const matchSearch =
       p.nom.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.lieu || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.client?.nom || "").toLowerCase().includes(searchQuery.toLowerCase())
 
+    // Filtre statut
     const matchStatus = statusFilter === "All" || p.statut === statusFilter
-    return matchSearch && matchStatus
+    
+    // Filtre type de projet
+    const matchTypeProjet = typeProjetFilter === 'all' || p.typeProjet === typeProjetFilter
+    
+    // Filtre budget
+    let matchBudget = true
+    if (budgetFilter !== 'all') {
+      const budget = p.budgetEstime
+      switch (budgetFilter) {
+        case '< 50k':
+          matchBudget = budget < 50000
+          break
+        case '50k - 100k':
+          matchBudget = budget >= 50000 && budget <= 100000
+          break
+        case '100k - 200k':
+          matchBudget = budget >= 100000 && budget <= 200000
+          break
+        case '> 200k':
+          matchBudget = budget > 200000
+          break
+      }
+    }
+    
+    // Filtre date de début
+    let matchDate = true
+    if (dateFilter !== 'all') {
+      const dateDebut = new Date(p.dateDebut)
+      const now = new Date()
+      const currentYear = now.getFullYear()
+      const currentMonth = now.getMonth()
+      
+      switch (dateFilter) {
+        case 'ce-mois':
+          matchDate = dateDebut.getMonth() === currentMonth && dateDebut.getFullYear() === currentYear
+          break
+        case 'ce-trimestre':
+          const currentQuarter = Math.floor(currentMonth / 3)
+          const projectQuarter = Math.floor(dateDebut.getMonth() / 3)
+          matchDate = projectQuarter === currentQuarter && dateDebut.getFullYear() === currentYear
+          break
+        case 'cette-annee':
+          matchDate = dateDebut.getFullYear() === currentYear
+          break
+        case 'annee-passee':
+          matchDate = dateDebut.getFullYear() === currentYear - 1
+          break
+      }
+    }
+    
+    return matchSearch && matchStatus && matchTypeProjet && matchBudget && matchDate
   })
 
   // ================= SORT =================
@@ -231,8 +357,22 @@ export default function ProjectsView() {
   const resetFilters = () => {
     setSearchQuery("")
     setStatusFilter("All")
+    setTypeProjetFilter('all')
+    setBudgetFilter('all')
+    setDateFilter('all')
     setCurrentPage(1)
   }
+
+  const handleEditSave = useCallback(() => {
+    setEditingProjectId(null)
+    fetchProjects()
+    window.dispatchEvent(new CustomEvent('project-updated'))
+  }, [fetchProjects])
+
+  const handleEditCancel = useCallback(() => {
+    setEditingProjectId(null)
+    fetchProjects()
+  }, [fetchProjects])
 
   if (loading) {
     return (
@@ -249,17 +389,24 @@ export default function ProjectsView() {
     return <ProjectDetailView projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />
   }
 
- if (editingProjectId) {
-  return <EditProjectView projectId={editingProjectId} onBack={() => setEditingProjectId(null)} />
-}
+  if (editingProjectId) {
+    return (
+      <EditProjectView 
+        projectId={editingProjectId} 
+        onBack={handleEditCancel}
+        onSave={handleEditSave}
+      />
+    )
+  }
 
   return (
     <div className="space-y-6">
+      {/* Header avec bouton d'actualisation */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Projets</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Gérez et suivez tous vos projets 
+            Gérez et suivez tous vos projets
           </p>
         </div>
       </div>
@@ -348,37 +495,99 @@ export default function ProjectsView() {
           </div>
         </div>
 
+        {/* Panneau de filtres avancés */}
         {showFilters && (
           <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option>Type de projet</option>
-                <option>Développement Web</option>
-                <option>Mobile</option>
-                <option>Infrastructure</option>
-              </select>
-              <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option>Budget</option>
-                <option>&lt; 50k MAD</option>
-                <option>50k - 100k MAD</option>
-                <option>&gt; 100k MAD</option>
-              </select>
-              <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option>Date de début</option>
-                <option>Ce mois</option>
-                <option>Ce trimestre</option>
-                <option>Cette année</option>
-              </select>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Filtre Type de projet */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Type de projet</label>
+                <select
+                  value={typeProjetFilter}
+                  onChange={(e) => {
+                    setTypeProjetFilter(e.target.value as FiltreTypeProjet)
+                    setCurrentPage(1)
+                  }}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white"
+                >
+                  <option value="all">Tous les types</option>
+                  <option value="Développement Web">Développement Web</option>
+                  <option value="Développement Mobile">Développement Mobile</option>
+                  <option value="Design UI/UX">Design UI/UX</option>
+                  <option value="Consulting">Consulting</option>
+                  <option value="IT">IT</option>
+                </select>
+              </div>
+
+              {/* Filtre Budget */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget (DH)</label>
+                <select
+                  value={budgetFilter}
+                  onChange={(e) => {
+                    setBudgetFilter(e.target.value as FiltreBudget)
+                    setCurrentPage(1)
+                  }}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white"
+                >
+                  <option value="all">Tous les budgets</option>
+                  <option value="< 50k">&lt; 50 000 DH</option>
+                  <option value="50k - 100k">50 000 - 100 000 DH</option>
+                  <option value="100k - 200k">100 000 - 200 000 DH</option>
+                  <option value="> 200k">&gt; 200 000 DH</option>
+                </select>
+              </div>
+
+              {/* Filtre Date de début */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Date de début</label>
+                <select
+                  value={dateFilter}
+                  onChange={(e) => {
+                    setDateFilter(e.target.value as FiltreDate)
+                    setCurrentPage(1)
+                  }}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white"
+                >
+                  <option value="all">Toutes les dates</option>
+                  <option value="ce-mois">Ce mois-ci</option>
+                  <option value="ce-trimestre">Ce trimestre</option>
+                  <option value="cette-annee">Cette année</option>
+                  <option value="annee-passee">Année passée</option>
+                </select>
+              </div>
             </div>
+
+            {/* Indicateur de filtres actifs */}
+            {(typeProjetFilter !== 'all' || budgetFilter !== 'all' || dateFilter !== 'all') && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="text-xs text-gray-500">Filtres actifs :</span>
+                {typeProjetFilter !== 'all' && (
+                  <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
+                    Type: {typeProjetFilter}
+                  </span>
+                )}
+                {budgetFilter !== 'all' && (
+                  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full">
+                    Budget: {budgetFilter}
+                  </span>
+                )}
+                {dateFilter !== 'all' && (
+                  <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full">
+                    Date: {dateFilter === 'ce-mois' ? 'Ce mois' : dateFilter === 'ce-trimestre' ? 'Ce trimestre' : dateFilter === 'cette-annee' ? 'Cette année' : 'Année passée'}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        <div className="mt-3 text-xs text-gray-500">
-          {filteredProjects.length} projet(s) trouvé(s)
-          {searchQuery && (
-            <button onClick={resetFilters} className="ml-2 text-[#ef7c21] hover:underline">
-              <X className="h-3 w-3 inline mr-1" />
-              Réinitialiser
+        <div className="mt-3 text-xs text-gray-500 flex justify-between items-center">
+          <span>{filteredProjects.length} projet(s) trouvé(s)</span>
+          {(searchQuery || statusFilter !== "All" || typeProjetFilter !== 'all' || budgetFilter !== 'all' || dateFilter !== 'all') && (
+            <button onClick={resetFilters} className="text-[#ef7c21] hover:underline flex items-center gap-1">
+              <X className="h-3 w-3" />
+              Réinitialiser tous les filtres
             </button>
           )}
         </div>
@@ -386,111 +595,105 @@ export default function ProjectsView() {
 
       {/* Vue Grille */}
       {viewMode === "grid" && (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {paginated.map(project => {
-              const progress = calculateProgress(project.phases)
-              return (
-                <Card
-                  key={project.id}
-                  className="group relative overflow-hidden bg-white/90 backdrop-blur-xl rounded-xl border border-white/40 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300"
-                >
-                  <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#ef7c21] to-orange-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                  
-                  <div className="p-5">
-                    <div className="flex justify-between items-start mb-3">
-                      <h3 className="font-semibold text-gray-900 line-clamp-1 group-hover:text-[#ef7c21] transition-colors">
-                        {project.nom}
-                      </h3>
-                      <Badge
-                        variant={getStatusVariant(project.statut)}
-                        className={`shrink-0 ml-2 ${getStatusColor(project.statut)} rounded-full px-2 py-0.5 text-xs font-medium`}
-                      >
-                        {project.statut}
-                      </Badge>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {paginated.map(project => {
+            const progress = calculateProgress(project.phases)
+            return (
+              <Card
+                key={project.id}
+                className="group relative overflow-hidden bg-white/90 backdrop-blur-xl rounded-xl border border-white/40 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300"
+              >
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#ef7c21] to-orange-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                
+                <div className="p-5">
+                  <div className="flex justify-between items-start mb-3">
+                    <h3 className="font-semibold text-gray-900 line-clamp-1 group-hover:text-[#ef7c21] transition-colors">
+                      {project.nom}
+                    </h3>
+                    <Badge
+                      variant={getStatusVariant(project.statut)}
+                      className={`shrink-0 ml-2 ${getStatusColor(project.statut)} rounded-full px-2 py-0.5 text-xs font-medium`}
+                    >
+                      {project.statut}
+                    </Badge>
+                  </div>
+
+                  <p className="text-sm text-gray-500 mb-3 line-clamp-2 min-h-[40px]">
+                    {project.description}
+                  </p>
+
+                  {project.client && (
+                    <div className="flex items-center gap-2 mb-2 text-xs text-gray-600">
+                      <span className="font-medium">Client:</span>
+                      <span>{project.client.nom}</span>
                     </div>
+                  )}
 
-                    <p className="text-sm text-gray-500 mb-3 line-clamp-2 min-h-[40px]">
-                      {project.description}
-                    </p>
-
-                    {project.client && (
-                      <div className="flex items-center gap-2 mb-2 text-xs text-gray-600">
-                        <span className="font-medium">Client:</span>
-                        <span>{project.client.nom}</span>
-                      </div>
-                    )}
-
-                    {project.lieu && (
-                      <div className="flex items-center gap-2 mb-2 text-xs text-gray-500">
-                        <MapPin className="h-3.5 w-3.5 text-[#ef7c21]" />
-                        <span>{project.lieu}</span>
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between mb-3 text-xs">
-                      <div className="flex items-center gap-1">
-                        <TrendingUp className="h-3.5 w-3.5 text-green-600" />
-                        <span className="font-medium">{project.budgetEstime.toLocaleString()} MAD</span>
-                      </div>
-                     
+                  {project.lieu && (
+                    <div className="flex items-center gap-2 mb-2 text-xs text-gray-500">
+                      <MapPin className="h-3.5 w-3.5 text-[#ef7c21]" />
+                      <span>{project.lieu}</span>
                     </div>
+                  )}
 
-                    <div className="mb-4">
-                      <div className="flex justify-between text-xs mb-1.5">
-                        <span className="text-gray-500">Progression</span>
-                        <span className="font-semibold text-gray-700">{progress}%</span>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all duration-500 ${getProgressColor(progress)}`}
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
+                  <div className="flex items-center justify-between mb-3 text-xs">
+                    <div className="flex items-center gap-1">
+                      <TrendingUp className="h-3.5 w-3.5 text-green-600" />
+                      <span className="font-medium">{project.budgetEstime.toLocaleString()} MAD</span>
                     </div>
-
-                    <div className="flex items-center justify-between text-xs text-gray-500 mb-4">
-                      <div className="flex items-center gap-1.5">
-                        <Calendar className="h-3.5 w-3.5 text-[#ef7c21]" />
-                        <span>{project.dateDebut}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="h-3.5 w-3.5 text-[#ef7c21]" />
-                        <span>{project.dateFinPrevue}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
-                      <Button
-                        size="sm"
-                        className="flex-1 bg-gray-50 hover:bg-[#ef7c21] hover:text-white text-gray-700 border-gray-200 transition-all duration-300"
-                        onClick={() => setSelectedProjectId(project.id)}
-                      >
-                        <Eye className="h-3.5 w-3.5 mr-1.5" />
-                        Détails
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="p-2 text-gray-400 hover:text-[#ef7c21] hover:bg-[#ef7c21]/5"
-                        onClick={() => setEditingProjectId(project.id)}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                    <div className="text-xs text-gray-500">
+                      {project.typeProjet}
                     </div>
                   </div>
-                </Card>
-              )
-            })}
-          </div>
-        </>
+
+                  <div className="mb-4">
+                    <div className="flex justify-between text-xs mb-1.5">
+                      <span className="text-gray-500">Progression</span>
+                      <span className="font-semibold text-gray-700">{progress}%</span>
+                    </div>
+                    <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${getProgressColor(progress)}`}
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-gray-500 mb-4">
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-[#ef7c21]" />
+                      <span>{project.dateDebut}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-[#ef7c21]" />
+                      <span>{project.dateFinPrevue}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
+                    <Button
+                      size="sm"
+                      className="flex-1 bg-gray-50 hover:bg-[#ef7c21] hover:text-white text-gray-700 border-gray-200 transition-all duration-300"
+                      onClick={() => setSelectedProjectId(project.id)}
+                    >
+                      <Eye className="h-3.5 w-3.5 mr-1.5" />
+                      Détails
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="p-2 text-gray-400 hover:text-[#ef7c21] hover:bg-[#ef7c21]/5"
+                      onClick={() => setEditingProjectId(project.id)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
       )}
 
       {/* Vue Tableau */}
@@ -533,6 +736,7 @@ export default function ProjectsView() {
                       <td className="px-4 py-3">
                         <div className="font-medium text-gray-900">{project.nom}</div>
                         <div className="text-xs text-gray-500 truncate max-w-xs">{project.description}</div>
+                        <div className="text-xs text-gray-400 mt-1">{project.typeProjet}</div>
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={getStatusVariant(project.statut)} className={`${getStatusColor(project.statut)} rounded-full px-2 py-0.5 text-xs`}>
@@ -558,9 +762,7 @@ export default function ProjectsView() {
                           <Button variant="ghost" size="sm" className="p-1.5 text-gray-400 hover:text-[#ef7c21]" onClick={() => setEditingProjectId(project.id)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" className="p-1.5 text-gray-400 hover:text-red-600">
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          
                         </div>
                       </td>
                     </tr>
@@ -586,7 +788,7 @@ export default function ProjectsView() {
                 setItemsPerPage(Number(e.target.value))
                 setCurrentPage(1)
               }}
-              className="border border-gray-200 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="border border-gray-200 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#ef7c21]"
             >
               <option value={6}>6 par page</option>
               <option value={9}>9 par page</option>
@@ -620,8 +822,8 @@ export default function ProjectsView() {
                   onClick={() => setCurrentPage(pageNum)}
                   className={
                     currentPage === pageNum
-                      ? 'bg-blue-600 text-white hover:bg-blue-700'
-                      : 'border-gray-200 hover:border-blue-300 hover:text-blue-600'
+                      ? 'bg-[#ef7c21] text-white hover:bg-[#d95f0c]'
+                      : 'border-gray-200 hover:border-[#ef7c21] hover:text-[#ef7c21]'
                   }
                 >
                   {pageNum}

@@ -58,14 +58,15 @@ export function Sidebar({
       icon: TrendingUp,
     },
   ] as const
+  
   const toggleSidebar = () => {
     const newState = !isCollapsed
     setIsCollapsed(newState)
     onCollapsedChange?.(newState)
   }
+  
   return (
     <>
-      
       <button
         onClick={toggleSidebar}
         className={`fixed top-4 z-20 bg-white border border-gray-200 rounded-full p-2 shadow-md hover:shadow-lg transition-all duration-300 ${isCollapsed ? 'left-20' : 'left-64'}`}
@@ -83,19 +84,26 @@ export function Sidebar({
       <aside
         className={`bg-white flex flex-col h-screen fixed left-0 top-0 z-10 font-['Poppins'] shadow-lg transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}
       >
-    
+        {/* Header avec logo - VERSION AGRANDIE */}
         <div
-          className={`h-16 flex items-center border-b border-gray-200 ${isCollapsed ? 'justify-center px-0' : 'px-6'}`}
+          className={`h-20 flex items-center border-b border-gray-200 transition-all duration-300 ${
+            isCollapsed ? 'justify-center px-0' : 'px-6'
+          }`}
         >
-          <Briefcase className="h-6 w-6 text-[#ef7c21] flex-shrink-0" />
-          {!isCollapsed && (
-            <span className="font-semibold text-gray-800 text-lg tracking-tight ml-3">
-              Project<span className="text-[#ef7c21]">Flow</span>
-            </span>
+          {isCollapsed ? (
+            // Quand la sidebar est fermée : Icône générique
+            <Briefcase className="h-7 w-7 text-[#ef7c21] flex-shrink-0" />
+          ) : (
+           <img
+  src="https://z-cdn-media.chatglm.cn/files/f95aa87a-1a5e-4c92-9365-b5db842cb0c5.png?auth_key=1876432345-51dbc54e1cc64042a6b855225769d34f-0-d9f4bbf9545d663555ea1d6f0769f10d"
+  alt="ITANIS Logo"
+  style={{ height: '80px', width: 'auto' }}
+  className="object-contain"
+/>
           )}
         </div>
 
-    
+        {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-6 px-2 space-y-1">
           {navItems.map((item) => {
             const isActive = activeView === item.id
@@ -120,8 +128,8 @@ export function Sidebar({
           })}
         </nav>
 
+        {/* Footer */}
         <div className="border-t border-gray-200">
-
           <div
             className={`border-b border-gray-200 ${isCollapsed ? 'px-2 py-4' : 'px-4 py-3'}`}
           >

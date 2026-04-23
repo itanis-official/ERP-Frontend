@@ -11,17 +11,6 @@ export interface SubTaskToTest {
   projet: string
 }
 
-export interface ValidationHistory {
-  id: string
-  subTaskId: number
-  subTaskTitle: string
-  taskTitle: string
-  project: string
-  validatedBy: string
-  validatedAt: Date
-  status: 'validated' | 'rejected'
-  comments?: string
-}
 
 export const getSubTasksToTest = async (projetId?: number): Promise<SubTaskToTest[]> => {
   try {
@@ -52,12 +41,3 @@ export const rejectSubTask = async (subTaskId: number, reason: string): Promise<
   }
 }
 
-export const getValidationHistory = async (): Promise<ValidationHistory[]> => {
-  try {
-    const response = await api.get('/SousTaches/historique-validation')
-    return response.data
-  } catch (error) {
-    console.error('Erreur lors de la récupération de l\'historique:', error)
-    return []
-  }
-}

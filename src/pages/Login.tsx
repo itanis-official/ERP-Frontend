@@ -25,8 +25,8 @@ interface LoginPageProps {
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
-  const [email, setEmail] = useState('demo@projectflow.com')
-  const [password, setPassword] = useState('password')
+  const [email, setEmail] = useState('user@example.com')
+  const [password, setPassword] = useState('stringA123!')
  
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)

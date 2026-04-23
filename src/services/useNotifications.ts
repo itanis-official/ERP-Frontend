@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react"
+// useNotifications.ts
+import { useEffect, useState, useCallback } from "react"
 import { getNotifications, markNotificationAsRead } from "./notificationService"
 import type { Notification } from "./notificationService"
+
 export function useNotifications(employeId: number) {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = useCallback(async () => {
+    if (!employeId) return
     try {
       setLoading(true)
       const data = await getNotifications(employeId)
@@ -15,7 +18,7 @@ export function useNotifications(employeId: number) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [employeId])
 
   const markAsRead = async (id: number) => {
     try {
@@ -34,12 +37,35 @@ export function useNotifications(employeId: number) {
         await markNotificationAsRead(n.id)
       }
     }
-    fetchNotifications()
+    await fetchNotifications() // Rafraîchir après avoir tout marqué
   }
 
   useEffect(() => {
-    if (employeId) fetchNotifications()
-  }, [employeId])
+    if (employeId) {
+      fetchNotifications()
+      
+      // Polling toutes les 10 secondes
+      const interval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          fetchNotifications()
+        }
+      }, 10000)
+      
+      return () => clearInterval(interval)
+    }
+  }, [employeId, fetchNotifications])
+
+  // Rafraîchir quand la page devient visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && employeId) {
+        fetchNotifications()
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [employeId, fetchNotifications])
 
   const unreadCount = notifications.filter(n => !n.lu).length
 

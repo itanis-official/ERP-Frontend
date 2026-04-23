@@ -39,7 +39,7 @@ export interface Commentaire {
 export const getMySubTasks = async (projetId?: number): Promise<SubTaskFromApi[]> => {
   try {
     const params = projetId ? { projetId } : {}
-    const response = await api.get('/Projets/mes-sous-taches', { params })
+    const response = await api.get('/SousTaches/mes-sous-taches', { params })
     return response.data
   } catch (error) {
     console.error('Erreur lors de la récupération des sous-tâches:', error)
@@ -63,33 +63,6 @@ export const getSubTaskComments = async (subTaskId: number): Promise<Commentaire
   } catch (error) {
     console.error('Erreur lors de la récupération des commentaires:', error)
     return []
-  }
-}
-
-export const getSubTaskDetails = async (subTaskId: number): Promise<SubTaskFromApi> => {
-  try {
-    // Essayer plusieurs endpoints possibles
-    const endpoints = [
-      `/SousTaches/${subTaskId}`,
-      `/SousTaches/details/${subTaskId}`,
-      `/SousTaches/${subTaskId}/details`
-    ]
-    
-    for (const endpoint of endpoints) {
-      try {
-        const response = await api.get(endpoint)
-        return response.data
-      } catch (err) {
-        // Continuer vers l'endpoint suivant
-      }
-    }
-    
-    // Si aucun endpoint ne fonctionne, retourner un objet vide avec l'ID
-    console.warn(`Aucun endpoint trouvé pour les détails de la tâche ${subTaskId}`)
-    return { id: subTaskId, titre: '', dureeEstimeeHeures: 0, tacheId: 0, tacheTitre: '', projetId: 0, projetNom: '' }
-  } catch (error) {
-    console.error('Erreur lors de la récupération des détails:', error)
-    throw error
   }
 }
 

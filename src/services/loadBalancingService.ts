@@ -1,36 +1,33 @@
-const API_URL = 'http://localhost:5101/api/LoadBalancing'
-import api from "./api"
-const handleResponse = async (res: Response) => {
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Erreur API: ${res.status} - ${text}`)
-  }
-  return res.json()
+import api from './api'
+
+export interface OverloadedEmployee {
+  employeId: number
+  nom: string
+  date: string
+  chargeJour: number
+  maxAllowed: number
 }
 
-export const getLoads = async () => {
-  const res = await fetch(`${API_URL}/loads`)
-  return handleResponse(res)
+
+export interface GlobalLoad {
+  employeId: number
+  employeNom: string
+  date: string
+  totalHeures: number
+  projetId: number
+  projetNom: string
+  taskId: string
+  taskTitre: string
+  sousTacheId: string
 }
 
-export const getDailyLoads = async () => {
-  const res = await fetch(`${API_URL}/daily-loads`)
-  return handleResponse(res)
+export const getOverloaded = async (maxHours: number = 8): Promise<OverloadedEmployee[]> => {
+  const response = await api.get('/LoadBalancing/overloaded', { params: { maxHours } })
+  return response.data
 }
 
-export const getOverloaded = async () => {
-  const res = await fetch(`${API_URL}/overloaded`)
-  return handleResponse(res)
+export const getAllLoads = async (): Promise<GlobalLoad[]> => {
+  const response = await api.get('/LoadBalancing/all')
+  return response.data
 }
 
-export const getSuggestions = async () => {
-  const res = await fetch(`${API_URL}/suggestions`)
-  return handleResponse(res)
-}
-
-export const autoBalance = async () => {
-  const res = await fetch(`${API_URL}/auto-balance`, {
-    method: 'POST'
-  })
-  return handleResponse(res)
-}
