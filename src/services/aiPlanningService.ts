@@ -21,6 +21,7 @@ export interface GeneratePlanningInput {
   budgetEstime: number
   equipeDisponible?: MembreEquipe[]
   joursFeries?: string[]
+  projetId?: number
 }
 
 export interface SousTacheGeneree {

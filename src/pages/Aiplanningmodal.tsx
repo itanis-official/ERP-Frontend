@@ -1,11 +1,8 @@
-// components/AIPlanningModal.tsx
-// Modal "Générer planning avec IA" — preview complet avant application.
-
-import React, { useState, useCallback } from 'react'
+import  { useState, useCallback } from 'react'
 import {
   Sparkles, X, ChevronDown, ChevronUp, User, Calendar, Clock,
   Zap, RefreshCw, CheckCircle, AlertTriangle, Info, Star,
-  ArrowRight, ListTodo, BarChart2, Shield, Lightbulb, Check,
+  ArrowRight, ListTodo, BarChart2, Check,
   Loader2, Play,
 } from 'lucide-react'
 import {

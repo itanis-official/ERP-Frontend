@@ -62,6 +62,7 @@ import {
   fetchTunisiaHolidays,
   fetchHolidaysForRange,
 } from '../services/holidayService'
+import api from '../services/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -179,11 +180,15 @@ export function EditProjectView({
   const [expandedTasks, setExpandedTasks] = useState<string[]>([])
   const [addingMembers, setAddingMembers] = useState(false)
   const [removingMemberId, setRemovingMemberId] = useState<number | null>(null)
-const [loads, setLoads] = useState<GlobalLoad[]>([])
+  const [loads, setLoads] = useState<GlobalLoad[]>([])
   const [overloaded, setOverloaded] = useState<any[]>([])
   const [suggestions, setSuggestions] = useState<any[]>([])
   const [showValidatedSubtasks, setShowValidatedSubtasks] = useState(true)
-const [showAIModal, setShowAIModal] = useState(false)
+  const [showAIModal, setShowAIModal] = useState(false)
+
+  // ── Chef de projet (depuis GroupesEquipe.ChefEquipeId) ──────────────
+  const [chefEquipeId, setChefEquipeId] = useState<number | null>(null)
+
   // ── Jours fériés (API dynamique) ─────────────────────────────────────────
   const [joursFeries, setJoursFeries] = useState<JourFerie[]>([])
   const [isLoadingHolidays, setIsLoadingHolidays] = useState(false)
@@ -216,6 +221,21 @@ const [showAIModal, setShowAIModal] = useState(false)
   const [availableMembers, setAvailableMembers] = useState<TeamMember[]>([])
   const [loadingMembers, setLoadingMembers] = useState(false)
 
+  // ==================== CHEF DE PROJET ====================
+  const chefProjet = useMemo(() => {
+    if (chefEquipeId) {
+      const byId = teamMembers.find(m => m.id === chefEquipeId)
+      if (byId) return byId
+    }
+    return teamMembers.find(m =>
+      m.role?.toLowerCase().includes('chef') ||
+      m.role?.toLowerCase().includes('lead') ||
+      m.role?.toLowerCase().includes('manager') ||
+      m.role?.toLowerCase().includes('directeur') ||
+      m.role?.toLowerCase().includes('scrum master')
+    )
+  }, [teamMembers, chefEquipeId])
+
   // ==================== JOURS FÉRIÉS API ====================
 
   const loadHolidaysFromAPI = useCallback(async (year: number) => {
@@ -223,14 +243,14 @@ const [showAIModal, setShowAIModal] = useState(false)
       setIsLoadingHolidays(true)
       setHolidayError(null)
       const holidays = await fetchTunisiaHolidays(year)
-      
+
       const mappedHolidays: JourFerie[] = holidays.map(holiday => ({
         id: `holiday-${holiday.date}`,
         date: holiday.date,
         nom: holiday.localName || holiday.name,
         recurrent: holiday.fixed || false,
       }))
-      
+
       setJoursFeries(mappedHolidays)
     } catch (err) {
       console.error('Erreur chargement jours fériés:', err)
@@ -246,14 +266,14 @@ const [showAIModal, setShowAIModal] = useState(false)
       setIsLoadingHolidays(true)
       setHolidayError(null)
       const holidays = await fetchHolidaysForRange(startDate, endDate)
-      
+
       const mappedHolidays: JourFerie[] = holidays.map(holiday => ({
         id: `holiday-${holiday.date}`,
         date: holiday.date,
         nom: holiday.localName || holiday.name,
         recurrent: holiday.fixed || false,
       }))
-      
+
       setJoursFeries(mappedHolidays)
     } catch (err) {
       console.error('Erreur chargement jours fériés:', err)
@@ -267,7 +287,7 @@ const [showAIModal, setShowAIModal] = useState(false)
     const mm = String(date.getMonth() + 1).padStart(2, '0')
     const dd = String(date.getDate()).padStart(2, '0')
     const yyyy = date.getFullYear()
-    
+
     return joursFeries.some(jf => {
       if (jf.recurrent) {
         const jfMmDd = jf.date.slice(5)
@@ -284,24 +304,25 @@ const [showAIModal, setShowAIModal] = useState(false)
     return day !== 0 && day !== 6 && !isJourFerie(date)
   }, [isJourFerie])
 
-const countWorkDays = useCallback((start: Date, end: Date): number => {
-  let count = 0
-  const current = new Date(start)
-  const endDate = new Date(end)
-  
-  while (current <= endDate) {
-    if (isWorkDay(new Date(current))) {
-      count++
+  const countWorkDays = useCallback((start: Date, end: Date): number => {
+    let count = 0
+    const current = new Date(start)
+    const endDate = new Date(end)
+
+    while (current <= endDate) {
+      if (isWorkDay(new Date(current))) {
+        count++
+      }
+      current.setDate(current.getDate() + 1)
     }
-    current.setDate(current.getDate() + 1)
-  }
-  
-  return Math.max(1, count) // Au moins 1 jour
-}, [isWorkDay])
+
+    return Math.max(1, count)
+  }, [isWorkDay])
+
   const getFeriesInRange = useCallback((start: Date, end: Date): JourFerie[] => {
     const result: JourFerie[] = []
     const uniqueDates = new Set<string>()
-    
+
     joursFeries.forEach(jf => {
       if (jf.recurrent) {
         const mmdd = jf.date.slice(5)
@@ -328,7 +349,7 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
         }
       }
     })
-    
+
     return result
   }, [joursFeries])
 
@@ -336,7 +357,6 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
     return [...joursFeries].sort((a, b) => a.date.localeCompare(b.date))
   }, [joursFeries])
 
-  // Group holidays by month for display
   const holidaysByMonth = useMemo(() => {
     const groups: Record<string, JourFerie[]> = {}
     joursFeriesSorted.forEach(jf => {
@@ -383,7 +403,7 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
   const addCompetence = async () => {
     if (!newComp.nom.trim()) { alert('Renseignez le nom de la compétence.'); return }
     if (competences.some(c => c.nom.toLowerCase() === newComp.nom.trim().toLowerCase())) {
-      alert('Cette compétence existe déjà.');
+      alert('Cette compétence existe déjà.')
       return
     }
     try {
@@ -603,24 +623,20 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
 
   // ==================== LOGIQUE DE CHARGE ====================
 
-    const getExistingDailyLoad = useCallback((memberId: number, date: Date, excludeTaskId?: string): number => {
+  const getExistingDailyLoad = useCallback((memberId: number, date: Date, excludeTaskId?: string): number => {
     if (!isWorkDay(date)) return 0
     let total = 0
-    
-    // 1. Additionner les charges des AUTRES projets (Multi-projets)
+
     loads.forEach((load: GlobalLoad) => {
       if (load.employeId !== memberId) return
-      // Ignorer les tâches du projet actuel pour éviter de compter double 
-      // (car on les calcule juste en dessous dans la boucle 'phases')
-      if (project && load.projetId === project.id) return 
-      
+      if (project && load.projetId === project.id) return
+
       const loadDate = new Date(load.date)
       if (loadDate.toDateString() === date.toDateString()) {
         total += load.totalHeures
       }
     })
 
-    // 2. Additionner les charges du projet actuel (calcul local)
     phases.forEach(phase => {
       phase.taches.forEach(task => {
         if (excludeTaskId && task.id === excludeTaskId) return
@@ -632,9 +648,10 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
         total += h / wd
       })
     })
-    
+
     return total
-  }, [loads, phases, isWorkDay, countWorkDays, project]) // Ajout de 'project' au tableau de dépendances
+  }, [loads, phases, isWorkDay, countWorkDays, project])
+
   const getTaskDailyContribution = useCallback((task: Tache): number => {
     const s = new Date(task.dateDebutPrevue), e = new Date(task.dateFinPrevue)
     if (isNaN(s.getTime()) || isNaN(e.getTime())) return 0
@@ -642,6 +659,7 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
     const wd = Math.max(1, countWorkDays(s, e))
     return h / wd
   }, [countWorkDays])
+
   const getAssignmentConflict = useCallback((
     memberId: number | undefined,
     task: Tache,
@@ -649,35 +667,25 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
   ): { hasConflict: boolean; conflictingDates: string[]; message: string; suggestedAction?: string; dailyLoad?: number } => {
     if (!memberId || !task.dateDebutPrevue || !task.dateFinPrevue)
       return { hasConflict: false, conflictingDates: [], message: '' }
-    
+
     const startDate = new Date(task.dateDebutPrevue), endDate = new Date(task.dateFinPrevue)
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()))
       return { hasConflict: false, conflictingDates: [], message: '' }
 
-    // --- LOGIQUE ADAPTATIVE (2 PASSAGES) ---
-    
-    // 1. Calculer le nombre total de jours ouvrés dans la période
     const totalWorkDays = countWorkDays(startDate, endDate)
-    
-    // 2. Premier passage : Identifier combien de jours sont déjà saturés (charge >= 8h)
     let blockedDaysCount = 0
-    
+
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const cur = new Date(d)
-      if (!isWorkDay(cur)) continue // On ignore les week-ends et fériés
-      
+      if (!isWorkDay(cur)) continue
       const existing = getExistingDailyLoad(memberId, cur, excludeTaskId)
-      
-      // Si l'employé est déjà à 8h ou plus, ce jour est "bloqué" pour cette nouvelle tâche
       if (existing >= MAX_HOURS_PER_DAY) {
         blockedDaysCount++
       }
     }
 
-    // 3. Calculer les jours réellement disponibles pour effectuer cette tâche
-    // Si tous les jours sont bloqués, on ne peut pas faire la tâche
     const availableWorkDays = totalWorkDays - blockedDaysCount
-    
+
     if (availableWorkDays <= 0) {
       return {
         hasConflict: true,
@@ -688,61 +696,43 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
       }
     }
 
-    // 4. Calculer la nouvelle charge journalière effective (Répartie sur les jours disponibles uniquement)
     const totalHours = getRemainingTaskHours(task)
     const effectiveDailyContribution = totalHours / availableWorkDays
 
-    // 5. Deuxième passage : Vérifier les conflits réels avec cette nouvelle charge
     const conflictingDates: string[] = []
 
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const cur = new Date(d)
       if (!isWorkDay(cur)) continue
-      
       const existing = getExistingDailyLoad(memberId, cur, excludeTaskId)
-      
-      // Si le jour est bloqué (saturé), l'employé ne travaille PAS sur cette tâche ce jour-là.
-      // On considère donc que la charge de cette tâche est décalée sur les autres jours disponibles.
-      if (existing >= MAX_HOURS_PER_DAY) {
-        continue 
-      }
-
-      // Sur les jours disponibles, on ajoute la charge calculée et on vérifie le dépassement
+      if (existing >= MAX_HOURS_PER_DAY) continue
       const total = existing + effectiveDailyContribution
-      
       if (total > MAX_HOURS_PER_DAY) {
         conflictingDates.push(`${cur.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} (${total.toFixed(1)}h > ${MAX_HOURS_PER_DAY}h)`)
       }
     }
 
-    // --- MESSAGES UTILISATEUR ---
-    
     let message = ''
-    
-    // Cas 1 : Vrai conflit (même en redistribuant sur les jours libres, ça dépasse)
     if (conflictingDates.length === 1) message = `Dépasse 8h le ${conflictingDates[0]}`
     else if (conflictingDates.length > 1 && conflictingDates.length <= 3) message = `Dépasse 8h les : ${conflictingDates.join(', ')}`
     else if (conflictingDates.length > 3) message = `Dépasse 8h sur ${conflictingDates.length} jours ouvrés`
-    
-    // Cas 2 : Pas de conflit, mais on a dû "sauter" des jours saturés (Information positive pour l'utilisateur)
     else if (blockedDaysCount > 0) {
       message = `Charge ajustée : ${totalHours}h réparties sur ${availableWorkDays}j disponibles (${blockedDaysCount}j saturés exclus)`
     }
 
     let suggestedAction = ''
     if (conflictingDates.length > 0) {
-      const neededDays = Math.ceil(totalHours / MAX_HOURS_PER_DAY)
       suggestedAction = `Réduire la charge ou augmenter la durée de la tâche`
     } else if (blockedDaysCount > 0) {
-       suggestedAction = `L'employé est déjà occupé certains jours, la charge est concentrée sur ses jours libres.`
+      suggestedAction = `L'employé est déjà occupé certains jours, la charge est concentrée sur ses jours libres.`
     }
 
-    return { 
-      hasConflict: conflictingDates.length > 0, 
-      conflictingDates, 
-      message, 
-      suggestedAction, 
-      dailyLoad: effectiveDailyContribution 
+    return {
+      hasConflict: conflictingDates.length > 0,
+      conflictingDates,
+      message,
+      suggestedAction,
+      dailyLoad: effectiveDailyContribution
     }
   }, [getExistingDailyLoad, isWorkDay, countWorkDays, getRemainingTaskHours])
 
@@ -763,33 +753,29 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
   }, [phases, getAssignmentConflict, getMemberName])
 
   // ==================== CHARGEMENT ====================
-  // ==================== CHARGEMENT MULTI-PROJETS ====================
+
   useEffect(() => {
     const fetchMultiProjectData = async () => {
       if (initialLoading) return
       try {
-        // Récupérer toutes les charges planifiées sur l'entreprise
         const [globalLoads, overloadedEmployees] = await Promise.all([
           getAllLoads().catch(() => []),
           getOverloaded(MAX_HOURS_PER_DAY).catch(() => []),
         ])
-        
         setLoads(globalLoads)
         setOverloaded(overloadedEmployees)
       } catch (error) {
         console.error("Erreur chargement données multi-projets:", error)
       }
     }
-
     fetchMultiProjectData()
-  }, [initialLoading]) // Se déclenche quand le projet initial est chargé
+  }, [initialLoading])
+
   useEffect(() => {
     const init = async () => {
       try {
         setInitialLoading(true)
-        const [ membersData, projectData, competencesData] = await Promise.all([
-          
-         
+        const [membersData, projectData, competencesData] = await Promise.all([
           getAvailableMembers(),
           projectId && !propProject ? getProjetById(projectId) : Promise.resolve(propProject),
           getCompetences().catch(() => []),
@@ -810,6 +796,12 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
 
         if (projectData) {
           setProject(projectData)
+
+          const chefId = projectData.groupeEquipe?.chefEquipeId
+            || projectData.groupeEquipe?.chefEquipe?.id
+            || null
+          setChefEquipeId(chefId)
+
           setFormData({
             nom: projectData.nom || '',
             description: projectData.description || '',
@@ -878,9 +870,23 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
         }
       }
     }
-    
     loadProjectHolidays()
   }, [formData.dateDebut, formData.dateFinPrevue, loadHolidaysForDateRange])
+
+  // Assigner automatiquement le chef comme testeur UNIQUEMENT pour les tâches sans testeur
+  useEffect(() => {
+    if (!chefProjet) return
+
+    setPhases(prev => prev.map(p => ({
+      ...p,
+      taches: p.taches.map(t => {
+        if (!t.testeurId) {
+          return { ...t, testeurId: chefProjet.id }
+        }
+        return t
+      })
+    })))
+  }, [chefProjet])
 
   // ==================== SOUMISSION ====================
 
@@ -985,17 +991,23 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
     setExpandedTasks(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
 
   const addTask = (phaseId: string) => {
-    if (!formData.dateDebut || !formData.dateFinPrevue) { alert("⚠️ Définissez les dates du projet."); return }
+    if (!formData.dateDebut || !formData.dateFinPrevue) { 
+      alert("⚠️ Définissez d'abord les dates du projet."); 
+      return 
+    }
     const pS = new Date(formData.dateDebut), pE = new Date(formData.dateFinPrevue)
     let tE = new Date(pS)
     const dur = Math.min(8, Math.max(1, Math.floor((pE.getTime() - pS.getTime()) / 86_400_000)))
     tE.setDate(tE.getDate() + dur)
     if (tE > pE) tE = new Date(pE)
     const newTask: Tache = {
-      id: genId(), titre: 'Nouvelle tâche',
+      id: genId(), 
+      titre: 'Nouvelle tâche',
       dateDebutPrevue: pS.toISOString().split('T')[0],
       dateFinPrevue: tE.toISOString().split('T')[0],
-      statut: 'AFaire', responsableId: undefined, testeurId: undefined,
+      statut: 'AFaire', 
+      responsableId: undefined, 
+      testeurId: chefProjet?.id,
       sousTaches: [{ id: genId(), titre: 'Nouvelle sous-tâche', dureeEstimeeHeures: 2, statut: 'AFaire' }],
       competencesRequises: [],
     }
@@ -1063,110 +1075,99 @@ const countWorkDays = useCallback((start: Date, end: Date): number => {
       ))
   }
 
-const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
-  if (!aiPhases || !Array.isArray(aiPhases) || aiPhases.length === 0) {
-    alert('Erreur : aucune phase générée.')
-    return
-  }
- 
-  // ── Mapping souple : on essaie de faire correspondre les noms de l'IA
-  //    aux 5 types de phases officiels du frontend.
-  const PHASE_MAP: Record<string, TypePhase> = {
-    // Mots-clés → phase officielle
-    'analyse':        'Analyse',
-    'conception':     'Conception',
-    'design':         'Conception',
-    'planification':  'Analyse',
-    'développement':  'MiseEnOeuvre',
-    'developpement':  'MiseEnOeuvre',
-    'implementation': 'MiseEnOeuvre',
-    'implémentation': 'MiseEnOeuvre',
-    'coding':         'MiseEnOeuvre',
-    'réalisation':    'MiseEnOeuvre',
-    'realisation':    'MiseEnOeuvre',
-    'test':           'Validation',
-    'validation':     'Validation',
-    'recette':        'Validation',
-    'qualité':        'Validation',
-    'lancement':      'MiseEnService',
-    'déploiement':    'MiseEnService',
-    'deploiement':    'MiseEnService',
-    'mise en service':'MiseEnService',
-    'livraison':      'MiseEnService',
-    'production':     'MiseEnService',
-  }
- 
-  const resolvePhaseType = (nomIA: string): TypePhase => {
-    const lower = nomIA.toLowerCase()
-    for (const [keyword, type] of Object.entries(PHASE_MAP)) {
-      if (lower.includes(keyword)) return type
+  const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
+    if (!aiPhases || !Array.isArray(aiPhases) || aiPhases.length === 0) {
+      alert('Erreur : aucune phase générée.')
+      return
     }
-    return 'MiseEnOeuvre' // fallback
-  }
- 
-  // ── Distribuer les phases IA sur les 5 phases du projet
-  //    Si l'IA génère plus de phases → on regroupe les tâches dans la phase correspondante
-  //    Si l'IA génère moins → certaines phases du projet resteront vides mais présentes
- 
-  // 1. Construire un map TypePhase → tâches accumulées
-  const tachesParPhase = new Map<TypePhase, typeof aiPhases[0]['taches']>()
-  PHASE_TYPES.forEach(t => tachesParPhase.set(t, []))
- 
-  aiPhases.forEach(aiPhase => {
-    if (!aiPhase || !aiPhase.taches) return
-    const type = resolvePhaseType(aiPhase.typePhase)
-    const existing = tachesParPhase.get(type) ?? []
-    tachesParPhase.set(type, [...existing, ...aiPhase.taches])
-  })
- 
-  // 2. Reconstruire les phases du frontend
-  const newPhases: Phase[] = PHASE_TYPES.map(type => {
-    // Chercher la phase existante pour conserver son id et pourcentageBudget
-    const existingPhase = phases.find(p => p.typePhase === type)
-    const aiTaches = tachesParPhase.get(type) ?? []
- 
-    // Trouver le pourcentageBudget dans les phases IA (si disponible)
-    const aiPhaseMatch = aiPhases.find(ap => resolvePhaseType(ap.typePhase) === type)
-    const pct = aiPhaseMatch?.pourcentageBudget ?? existingPhase?.pourcentageBudget ?? Math.floor(100 / PHASE_TYPES.length)
- 
-    const taches = aiTaches.map(aiTask => {
-      if (!aiTask) return null
-      return {
-        id: genId(),
-        titre: aiTask.titre || 'Tâche sans titre',
-        dateDebutPrevue: aiTask.dateDebutPrevue || formData.dateDebut,
-        dateFinPrevue:   aiTask.dateFinPrevue   || formData.dateFinPrevue,
-        statut: 'AFaire',
-        responsableId: aiTask.responsableId ?? undefined,
-        testeurId:     aiTask.testeurId     ?? undefined,
-        competencesRequises: aiTask.competencesRequises || [],
-        sousTaches: (aiTask.sousTaches || []).map(st => ({
-          id: genId(),
-          titre: st.titre || 'Sous-tâche',
-          dureeEstimeeHeures: st.dureeEstimeeHeures || 1,
-          statut: 'AFaire',
-        })),
+
+    const PHASE_MAP: Record<string, TypePhase> = {
+      'analyse': 'Analyse',
+      'conception': 'Conception',
+      'design': 'Conception',
+      'planification': 'Analyse',
+      'développement': 'MiseEnOeuvre',
+      'developpement': 'MiseEnOeuvre',
+      'implementation': 'MiseEnOeuvre',
+      'implémentation': 'MiseEnOeuvre',
+      'coding': 'MiseEnOeuvre',
+      'réalisation': 'MiseEnOeuvre',
+      'realisation': 'MiseEnOeuvre',
+      'test': 'Validation',
+      'validation': 'Validation',
+      'recette': 'Validation',
+      'qualité': 'Validation',
+      'lancement': 'MiseEnService',
+      'déploiement': 'MiseEnService',
+      'deploiement': 'MiseEnService',
+      'mise en service': 'MiseEnService',
+      'livraison': 'MiseEnService',
+      'production': 'MiseEnService',
+    }
+
+    const resolvePhaseType = (nomIA: string): TypePhase => {
+      const lower = nomIA.toLowerCase()
+      for (const [keyword, type] of Object.entries(PHASE_MAP)) {
+        if (lower.includes(keyword)) return type
       }
-    }).filter(Boolean) as Tache[]
- 
-    return {
-      id: existingPhase?.id || genId(),
-      typePhase: type,
-      pourcentageBudget: pct,
-      statut: existingPhase?.statut || 'AFaire',
-      taches,
+      return 'MiseEnOeuvre'
     }
-  })
- 
-  setPhases(newPhases)
-  setExpandedPhases(newPhases.map(p => p.id))
-  setActiveTab('phases')
- 
-  // Résumé
-  const totalTaches = newPhases.reduce((acc, p) => acc + p.taches.length, 0)
-  const phasesAvecTaches = newPhases.filter(p => p.taches.length > 0).length
-  alert(`✅ Planning appliqué !\n\n📋 ${phasesAvecTaches}/5 phases renseignées\n📝 ${totalTaches} tâches créées\n\nVous pouvez maintenant modifier les tâches dans l'onglet "Phases & Tâches".`)
-}
+
+    const tachesParPhase = new Map<TypePhase, typeof aiPhases[0]['taches']>()
+    PHASE_TYPES.forEach(t => tachesParPhase.set(t, []))
+
+    aiPhases.forEach(aiPhase => {
+      if (!aiPhase || !aiPhase.taches) return
+      const type = resolvePhaseType(aiPhase.typePhase)
+      const existing = tachesParPhase.get(type) ?? []
+      tachesParPhase.set(type, [...existing, ...aiPhase.taches])
+    })
+
+    const newPhases: Phase[] = PHASE_TYPES.map(type => {
+      const existingPhase = phases.find(p => p.typePhase === type)
+      const aiTaches = tachesParPhase.get(type) ?? []
+
+      const aiPhaseMatch = aiPhases.find(ap => resolvePhaseType(ap.typePhase) === type)
+      const pct = aiPhaseMatch?.pourcentageBudget ?? existingPhase?.pourcentageBudget ?? Math.floor(100 / PHASE_TYPES.length)
+
+      const taches = aiTaches.map(aiTask => {
+        if (!aiTask) return null
+        return {
+          id: genId(),
+          titre: aiTask.titre || 'Tâche sans titre',
+          dateDebutPrevue: aiTask.dateDebutPrevue || formData.dateDebut,
+          dateFinPrevue: aiTask.dateFinPrevue || formData.dateFinPrevue,
+          statut: 'AFaire',
+          responsableId: aiTask.responsableId ?? undefined,
+          testeurId: chefProjet?.id ?? aiTask.testeurId ?? undefined,
+          competencesRequises: aiTask.competencesRequises || [],
+          sousTaches: (aiTask.sousTaches || []).map(st => ({
+            id: genId(),
+            titre: st.titre || 'Sous-tâche',
+            dureeEstimeeHeures: st.dureeEstimeeHeures || 1,
+            statut: 'AFaire',
+          })),
+        }
+      }).filter(Boolean) as Tache[]
+
+      return {
+        id: existingPhase?.id || genId(),
+        typePhase: type,
+        pourcentageBudget: pct,
+        statut: existingPhase?.statut || 'AFaire',
+        taches,
+      }
+    })
+
+    setPhases(newPhases)
+    setExpandedPhases(newPhases.map(p => p.id))
+    setActiveTab('phases')
+
+    const totalTaches = newPhases.reduce((acc, p) => acc + p.taches.length, 0)
+    const phasesAvecTaches = newPhases.filter(p => p.taches.length > 0).length
+    alert(`✅ Planning appliqué !\n\n📋 ${phasesAvecTaches}/5 phases renseignées\n📝 ${totalTaches} tâches créées\n⭐ Chef de projet assigné comme testeur par défaut\n\nVous pouvez maintenant modifier les tâches dans l'onglet "Phases & Tâches".`)
+  }
+
   const projectStats = useMemo(() => {
     if (!formData.dateDebut || !formData.dateFinPrevue) return null
     const start = new Date(formData.dateDebut), end = new Date(formData.dateFinPrevue)
@@ -1194,7 +1195,6 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
     return { total, workDays, weekendDays, feriesInPeriod, feriesList }
   }, [formData.dateDebut, formData.dateFinPrevue, joursFeries, isJourFerie])
 
-  // Statistiques compétences
   const competenceStats = useMemo(() => {
     const allRequired = new Set<string>()
     phases.forEach(ph => ph.taches.forEach(t => (t.competencesRequises || []).forEach(c => allRequired.add(c))))
@@ -1211,6 +1211,17 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
       coveragePct: allRequired.size === 0 ? 100 : Math.round((covered.size / allRequired.size) * 100),
     }
   }, [phases, teamMembers, employeCompetences])
+
+  // Fonction pour réassigner tous les testeurs au chef de projet
+  const reassignAllTestersToChef = () => {
+    if (!chefProjet) return
+    if (window.confirm(`Réassigner tous les testeurs à ${chefProjet.nomComplet} ?`)) {
+      setPhases(prev => prev.map(p => ({
+        ...p,
+        taches: p.taches.map(t => ({ ...t, testeurId: chefProjet.id }))
+      })))
+    }
+  }
 
   // ==================== MODALS ====================
 
@@ -1345,7 +1356,10 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                         {m.nomComplet.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-800 truncate">{m.nomComplet}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium text-gray-800 truncate">{m.nomComplet}</p>
+                          {chefProjet && m.id === chefProjet.id && <Star className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500 shrink-0" />}
+                        </div>
                         {m.missing.length > 0 && <p className="text-xs text-red-500 truncate">Manque : {m.missing.join(', ')}</p>}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
@@ -1397,44 +1411,44 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-8">
-     {/* Header */}
-<div className="flex items-center justify-between">
-  <div className="flex items-center gap-4">
-    <button onClick={onBack} className="p-2 rounded-xl hover:bg-gray-100 text-gray-600 transition-colors">
-      <ArrowLeft className="h-5 w-5" />
-    </button>
-    <div>
-      <nav className="text-sm text-gray-500 mb-1 flex items-center gap-2">
-        <span>Projets</span><span className="text-gray-300">/</span>
-        <span className="text-[#1d1d1b] font-medium">Modification</span>
-      </nav>
-      <h1 className="text-3xl font-bold text-[#1d1d1b]">Modifier le projet</h1>
-    </div>
-  </div>
-  <div className="flex items-center gap-3">
-    {/* Bouton IA */}
-    <Button
-      type="button"
-      variant="outline"
-      className="border-purple-400 text-purple-600 hover:bg-purple-50 hover:border-purple-500 flex items-center gap-2"
-      onClick={() => setShowAIModal(true)}
-    >
-      <Sparkles className="h-4 w-4" />
-      Générer avec IA
-    </Button>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 rounded-xl hover:bg-gray-100 text-gray-600 transition-colors">
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <div>
+            <nav className="text-sm text-gray-500 mb-1 flex items-center gap-2">
+              <span>Projets</span><span className="text-gray-300">/</span>
+              <span className="text-[#1d1d1b] font-medium">Modification</span>
+            </nav>
+            <h1 className="text-3xl font-bold text-[#1d1d1b]">Modifier le projet</h1>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            className="border-purple-400 text-purple-600 hover:bg-purple-50 hover:border-purple-500 flex items-center gap-2"
+            onClick={() => setShowAIModal(true)}
+          >
+            <Sparkles className="h-4 w-4" />
+            Générer avec IA
+          </Button>
 
-    {onDelete && (
-      <Button
-        variant="outline"
-        className="text-red-600 border-red-200 hover:bg-red-50"
-        onClick={() => { if (window.confirm('Supprimer ce projet ?')) onDelete(project.id) }}
-      >
-        <Trash2 className="h-4 w-4 mr-2" /> Supprimer
-      </Button>
-    )}
-  </div>
-</div>
-      {/* Banner période + couverture compétences */}
+          {onDelete && (
+            <Button
+              variant="outline"
+              className="text-red-600 border-red-200 hover:bg-red-50"
+              onClick={() => { if (window.confirm('Supprimer ce projet ?')) onDelete(project.id) }}
+            >
+              <Trash2 className="h-4 w-4 mr-2" /> Supprimer
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Banner période + couverture compétences + chef projet */}
       <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
         {projectStats && projectStats.workDays > 0 && (
           <div className="bg-gradient-to-r from-blue-50 to-white rounded-xl p-4 border border-blue-200">
@@ -1463,28 +1477,7 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
           </div>
         )}
 
-        {competenceStats.totalRequired > 0 && (
-          <div className="bg-gradient-to-r from-purple-50 to-white rounded-xl p-4 border border-purple-200">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center">
-                <Award className="h-5 w-5 text-purple-600" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-gray-700">Couverture des compétences</p>
-                <p className="text-xs text-gray-500">{competenceStats.covered}/{competenceStats.totalRequired} compétences requises</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div className="h-full bg-purple-500 rounded-full transition-all" style={{ width: `${competenceStats.coveragePct}%` }} />
-              </div>
-              <span className="text-sm font-bold text-purple-600">{competenceStats.coveragePct}%</span>
-            </div>
-            {competenceStats.missing.length > 0 && (
-              <p className="text-xs text-orange-600 mt-2">⚠️ Manque : {competenceStats.missing.slice(0, 3).join(', ')}{competenceStats.missing.length > 3 && ` +${competenceStats.missing.length - 3}`}</p>
-            )}
-          </div>
-        )}
+       
       </div>
 
       {/* Tabs */}
@@ -1605,7 +1598,7 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                         </select>
                       </div>
                     </div>
-                    
+
                     <div className="flex gap-2">
                       <Button type="button" size="sm" className="bg-[#ef7c21] hover:bg-[#d95f0c] text-white" onClick={addCompetence}>
                         <Plus className="h-3 w-3 mr-1" /> Ajouter
@@ -1687,14 +1680,16 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                         const memberSkills = employeCompetences.get(m.id) || []
                         const memberSkillsLower = memberSkills.map(s => s.toLowerCase())
                         const matchCount = competences.filter(c => memberSkillsLower.includes(c.nom.toLowerCase())).length
+                        const isChef = chefProjet && m.id === chefProjet.id
                         return (
-                          <tr key={m.id} className={mi % 2 === 0 ? 'bg-gray-50/50' : 'bg-white'}>
+                          <tr key={m.id} className={`${mi % 2 === 0 ? 'bg-gray-50/50' : 'bg-white'} ${isChef ? 'bg-yellow-50/60' : ''}`}>
                             <td className="p-2 pr-4 font-medium text-gray-800 whitespace-nowrap border-b border-gray-100">
                               <div className="flex items-center gap-2">
-                                <div className="w-6 h-6 rounded-full bg-[#ef7c21]/10 flex items-center justify-center text-[#ef7c21] text-xs font-bold shrink-0">
+                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${isChef ? 'bg-yellow-100 text-yellow-700' : 'bg-[#ef7c21]/10 text-[#ef7c21]'}`}>
                                   {m.nomComplet.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
                                 </div>
                                 <span className="truncate max-w-[120px]">{m.nomComplet}</span>
+                                {isChef && <Star className="h-3 w-3 text-yellow-500 fill-yellow-500 shrink-0" />}
                                 <span className="text-gray-400 text-xs">({matchCount}/{Math.min(competences.length, 12)})</span>
                               </div>
                             </td>
@@ -1724,16 +1719,14 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
               <div className="flex justify-between items-center">
                 <div>
                   <h3 className="text-lg font-semibold flex items-center gap-2">
-                    <CalendarOff className="h-5 w-5 text-[#ef7c21]" /> 
+                    <CalendarOff className="h-5 w-5 text-[#ef7c21]" />
                     JOURS FÉRIÉS EN TUNISIE
                   </h3>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Données officielles • Source: Nager.Date
-                  </p>
+                  <p className="text-xs text-gray-500 mt-1">Données officielles • Source: Nager.Date</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <select 
-                    value={holidayYear} 
+                  <select
+                    value={holidayYear}
                     onChange={(e) => {
                       const year = parseInt(e.target.value)
                       setHolidayYear(year)
@@ -1756,7 +1749,7 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                 </div>
               </div>
             </div>
-            
+
             <div className="p-6">
               {isLoadingHolidays ? (
                 <div className="flex items-center justify-center py-12">
@@ -1766,13 +1759,7 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                 <div className="text-center py-12 border-2 border-red-200 bg-red-50 rounded-xl">
                   <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-3" />
                   <p className="text-red-600 text-sm">{holidayError}</p>
-                  <button
-                    type="button"
-                    onClick={() => loadHolidaysFromAPI(holidayYear)}
-                    className="mt-3 text-xs text-[#ef7c21] hover:underline"
-                  >
-                    Réessayer
-                  </button>
+                  <button type="button" onClick={() => loadHolidaysFromAPI(holidayYear)} className="mt-3 text-xs text-[#ef7c21] hover:underline">Réessayer</button>
                 </div>
               ) : joursFeriesSorted.length === 0 ? (
                 <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
@@ -1801,9 +1788,7 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <span className="text-sm font-medium text-gray-800">{jf.nom}</span>
                                   {jf.recurrent && (
-                                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
-                                      🔁 Récurrent
-                                    </span>
+                                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">🔁 Récurrent</span>
                                   )}
                                 </div>
                                 <p className="text-xs text-gray-500 capitalize">{dayName}</p>
@@ -1816,7 +1801,7 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                   ))}
                 </div>
               )}
-              
+
               <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 flex items-start gap-2">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                 <div>
@@ -1840,6 +1825,17 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
               <div>
                 <h3 className="text-lg font-semibold">COMPOSITION DE L'ÉQUIPE</h3>
                 <p className="text-xs text-gray-500 mt-1">{teamMembers.length} membre(s)</p>
+                {chefProjet ? (
+                  <div className="flex items-center gap-1.5 mt-1 text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded-full border border-yellow-200 w-fit">
+                    <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
+                    <span>Chef de projet : <strong>{chefProjet.nomComplet}</strong> — Testeur par défaut (modifiable)</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 mt-1 text-xs text-orange-700 bg-orange-50 px-2 py-1 rounded-full border border-orange-200 w-fit">
+                    <AlertCircle className="h-3 w-3" />
+                    <span>Aucun chef de projet détecté — ajoutez un membre avec rôle "Chef" ou "Lead"</span>
+                  </div>
+                )}
               </div>
               <Button type="button" variant="outline" size="sm" onClick={() => setShowTeamSelector(!showTeamSelector)} className="text-xs border-[#ef7c21] text-[#ef7c21] hover:bg-[#ef7c21] hover:text-white" disabled={addingMembers}>
                 {addingMembers ? <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> : <UserPlus className="h-3 w-3 mr-1" />} Ajouter un membre
@@ -1851,19 +1847,21 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                   {teamMembers.map(member => {
                     const isRemoving = removingMemberId === member.id
                     const memberSkills = employeCompetences.get(member.id) || []
+                    const isChef = chefProjet && member.id === chefProjet.id
                     return (
-                      <div key={member.id} className="flex items-start justify-between p-4 bg-gradient-to-r from-gray-50 to-white rounded-xl border border-gray-200 hover:shadow-md transition-all group">
+                      <div key={member.id} className={`flex items-start justify-between p-4 rounded-xl border hover:shadow-md transition-all group ${isChef ? 'bg-gradient-to-r from-yellow-50 to-white border-yellow-200' : 'bg-gradient-to-r from-gray-50 to-white border-gray-200'}`}>
                         <div className="flex items-start gap-3 flex-1">
                           <div className="relative">
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#ef7c21]/20 to-[#ef7c21]/10 flex items-center justify-center text-[#ef7c21] font-semibold text-lg">
+                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-semibold text-lg ${isChef ? 'bg-gradient-to-br from-yellow-400 to-yellow-600 text-white' : 'bg-gradient-to-br from-[#ef7c21]/20 to-[#ef7c21]/10 text-[#ef7c21]'}`}>
                               {member.nomComplet.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
                             </div>
-                            {member.role?.toLowerCase().includes('chef') && <Star className="absolute -top-1 -right-1 h-4 w-4 text-yellow-500 fill-yellow-500" />}
+                            {isChef && <Star className="absolute -top-1 -right-1 h-4 w-4 text-yellow-500 fill-yellow-500" />}
                           </div>
                           <div className="flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-base font-semibold text-[#1d1d1b]">{member.nomComplet}</span>
-                              <span className="text-xs px-2 py-0.5 bg-[#ef7c21]/10 text-[#ef7c21] rounded-full">{member.role}</span>
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${isChef ? 'bg-yellow-100 text-yellow-700' : 'bg-[#ef7c21]/10 text-[#ef7c21]'}`}>{member.role}</span>
+                              {isChef && <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Testeur par défaut</span>}
                             </div>
                             {member.email && <div className="flex items-center gap-1 mt-1 text-xs text-gray-500"><Mail className="h-3 w-3" />{member.email}</div>}
                             {memberSkills.length > 0 && (
@@ -1878,9 +1876,9 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                           </div>
                         </div>
                         <div className="flex items-center gap-1">
-                          <button 
-                            type="button" 
-                            onClick={() => { setSelectedMemberForCompetence(member); setShowMemberCompetenceModal(true) }} 
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedMemberForCompetence(member); setShowMemberCompetenceModal(true) }}
                             className="p-2 hover:bg-purple-50 rounded-lg text-gray-400 hover:text-purple-600 transition-all opacity-0 group-hover:opacity-100"
                             title="Gérer les compétences"
                           >
@@ -1919,28 +1917,42 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                     {loadingMembers ? (
                       <div className="flex items-center justify-center py-12"><RefreshCw className="h-6 w-6 text-[#ef7c21] animate-spin" /></div>
                     ) : availableMembersFiltered.length > 0 ? (
-                      availableMembersFiltered.map(emp => (
-                        <div key={emp.id} onClick={() => addTeamMember(emp)} className="flex items-start gap-4 p-4 hover:bg-gray-50 cursor-pointer group">
-                          <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-gray-600 font-semibold text-sm group-hover:bg-[#ef7c21]/10 group-hover:text-[#ef7c21]">
-                            {emp.nomComplet.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium">{emp.nomComplet}</span>
-                              <span className="text-xs px-2 py-0.5 bg-gray-100 rounded-full">{emp.role}</span>
+                      availableMembersFiltered.map(emp => {
+                        const isExpectedChef = chefEquipeId && emp.id === chefEquipeId
+                        const wouldBeChefByRole = emp.role?.toLowerCase().includes('chef') || emp.role?.toLowerCase().includes('lead') || emp.role?.toLowerCase().includes('manager') || emp.role?.toLowerCase().includes('directeur') || emp.role?.toLowerCase().includes('scrum master')
+                        const isHighlighted = isExpectedChef || wouldBeChefByRole
+                        return (
+                          <div key={emp.id} onClick={() => addTeamMember(emp)} className={`flex items-start gap-4 p-4 cursor-pointer group ${isExpectedChef ? 'bg-yellow-50' : 'hover:bg-gray-50'}`}>
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-semibold text-sm shrink-0 ${isExpectedChef ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600 group-hover:bg-[#ef7c21]/10 group-hover:text-[#ef7c21]'}`}>
+                              {emp.nomComplet.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
                             </div>
-                            {emp.specialites && emp.specialites.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {emp.specialites.slice(0, 3).map((s, i) => {
-                                  const inRef = competences.some(c => c.nom.toLowerCase() === s.toLowerCase())
-                                  return <span key={i} className={`text-xs px-1.5 py-0.5 rounded-full ${inRef ? 'bg-[#ef7c21]/10 text-[#ef7c21]' : 'bg-gray-100 text-gray-500'}`}>{s}</span>
-                                })}
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium">{emp.nomComplet}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${isHighlighted ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100'}`}>{emp.role}</span>
+                                {isExpectedChef && (
+                                  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full flex items-center gap-1">
+                                    <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
+                                    ChefEquipeId — Testeur par défaut
+                                  </span>
+                                )}
+                                {!isExpectedChef && wouldBeChefByRole && (
+                                  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full">⭐ Deviendra testeur par défaut</span>
+                                )}
                               </div>
-                            )}
+                              {emp.specialites && emp.specialites.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {emp.specialites.slice(0, 3).map((s, i) => {
+                                    const inRef = competences.some(c => c.nom.toLowerCase() === s.toLowerCase())
+                                    return <span key={i} className={`text-xs px-1.5 py-0.5 rounded-full ${inRef ? 'bg-[#ef7c21]/10 text-[#ef7c21]' : 'bg-gray-100 text-gray-500'}`}>{s}</span>
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                            <Plus className={`h-5 w-5 shrink-0 ${isExpectedChef ? 'text-yellow-600' : 'text-gray-400 group-hover:text-[#ef7c21]'}`} />
                           </div>
-                          <Plus className="h-5 w-5 text-gray-400 group-hover:text-[#ef7c21]" />
-                        </div>
-                      ))
+                        )
+                      })
                     ) : (
                       <div className="text-center py-12">
                         <Search className="h-12 w-12 text-gray-300 mx-auto mb-3" />
@@ -2049,32 +2061,66 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                                     const hyp: Tache = { ...task, responsableId: m.id }
                                     const c = getAssignmentConflict(m.id, hyp, task.id)
                                     const matchLabel = required.length > 0 ? ` (${m.matchPct}%)` : ''
-                                    return <option key={m.id} value={m.id} disabled={c.hasConflict}>{m.nomComplet}{matchLabel}{c.hasConflict ? ` ⛔ dépasse ${MAX_HOURS_PER_DAY}h/j` : ''}</option>
+                                    const isChefOption = chefProjet && m.id === chefProjet.id
+                                    return <option key={m.id} value={m.id} disabled={c.hasConflict}>{isChefOption ? '⭐ ' : ''}{m.nomComplet}{matchLabel}{c.hasConflict ? ` ⛔ dépasse ${MAX_HOURS_PER_DAY}h/j` : ''}</option>
                                   })}
                                 </select>
                               </div>
+
+                              {/* ── TESTEUR : Select modifiable avec chef en valeur par défaut ── */}
                               <div className="flex items-center gap-2">
                                 <CheckCircle className="h-4 w-4 text-[#ef7c21] shrink-0" />
-                                <select value={task.testeurId || ''} onClick={e => e.stopPropagation()} onChange={e => {
-                                  e.stopPropagation()
-                                  const selectedId = e.target.value ? parseInt(e.target.value) : undefined
-                                  if (selectedId) {
-                                    const hyp: Tache = { ...task, testeurId: selectedId }
-                                    const c = getAssignmentConflict(selectedId, hyp, task.id)
-                                    if (c.hasConflict) {
-                                      alert(`⛔ "${getMemberName(selectedId)}" dépasserait ${MAX_HOURS_PER_DAY}h/jour\n\n${c.message}\n\n❌ Assignation refusée.`)
-                                      return
+                                <select 
+                                  value={task.testeurId || ''} 
+                                  onClick={e => e.stopPropagation()} 
+                                  onChange={e => {
+                                    e.stopPropagation()
+                                    const selectedId = e.target.value ? parseInt(e.target.value) : undefined
+                                    if (selectedId) {
+                                      const hyp: Tache = { ...task, testeurId: selectedId }
+                                      const c = getAssignmentConflict(selectedId, hyp, task.id)
+                                      if (c.hasConflict) {
+                                        alert(`⛔ "${getMemberName(selectedId)}" dépasserait ${MAX_HOURS_PER_DAY}h/jour\n\n${c.message}\n\n❌ Assignation refusée.`)
+                                        return
+                                      }
                                     }
-                                  }
-                                  updateTask(phase.id, task.id, 'testeurId', selectedId)
-                                }} className={`flex-1 px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#ef7c21] ${testConflict.hasConflict ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
-                                  <option value="">Choisir un testeur</option>
+                                    updateTask(phase.id, task.id, 'testeurId', selectedId)
+                                  }} 
+                                  className={`flex-1 px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#ef7c21] ${testConflict.hasConflict ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
+                                >
+                                  <option value="">Aucun testeur</option>
                                   {teamMembers.map(m => {
                                     const hyp: Tache = { ...task, testeurId: m.id }
                                     const c = getAssignmentConflict(m.id, hyp, task.id)
-                                    return <option key={m.id} value={m.id} disabled={c.hasConflict}>{m.nomComplet} - {m.role}{c.hasConflict ? ` ⛔` : ''}</option>
+                                    const isChef = chefProjet && m.id === chefProjet.id
+                                    return (
+                                      <option key={m.id} value={m.id} disabled={c.hasConflict}>
+                                        {isChef ? '⭐ ' : ''}{m.nomComplet} - {m.role}
+                                        {isChef ? ' (Chef - recommandé)' : ''}
+                                        {c.hasConflict ? ` ⛔ dépasse ${MAX_HOURS_PER_DAY}h/j` : ''}
+                                      </option>
+                                    )
                                   })}
                                 </select>
+                                {chefProjet && task.testeurId !== chefProjet.id && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const hyp: Tache = { ...task, testeurId: chefProjet.id }
+                                      const c = getAssignmentConflict(chefProjet.id, hyp, task.id)
+                                      if (c.hasConflict) {
+                                        alert(`⚠️ Le chef de projet dépasserait ${MAX_HOURS_PER_DAY}h/jour sur cette tâche.`)
+                                      } else {
+                                        updateTask(phase.id, task.id, 'testeurId', chefProjet.id)
+                                      }
+                                    }}
+                                    className="text-xs text-[#ef7c21] hover:underline whitespace-nowrap shrink-0"
+                                    title="Réassigner au chef de projet"
+                                  >
+                                    <Star className="h-3 w-3 inline mr-1" />
+                                    Réassigner au chef
+                                  </button>
+                                )}
                               </div>
                             </div>
 
@@ -2087,13 +2133,52 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
                             {feriesInTask.length > 0 && <div className="mt-2 text-xs text-orange-600 flex items-center gap-1"><CalendarOff className="h-3 w-3" /> {feriesInTask.length} jour(s) férié(s) : {feriesInTask.map(f => f.nom).join(', ')} — exclus du calcul</div>}
                             {dailyContribution > MAX_HOURS_PER_DAY && <div className="mt-2 text-xs text-red-600 flex items-center gap-1"><Clock className="h-3 w-3" /> Charge de {dailyContribution.toFixed(1)}h/jour dépasse la limite de {MAX_HOURS_PER_DAY}h</div>}
 
-                            {(task.responsableId || task.testeurId) && (
-                              <div className="flex flex-col gap-1 mt-2 text-xs">
-                                {task.responsableId && respConflict.hasConflict && <div className="flex items-start gap-1 text-red-600 font-medium bg-red-50 px-2 py-1 rounded-lg border border-red-200"><User className="h-3 w-3 shrink-0 mt-0.5" /><span>Responsable : {getMemberName(task.responsableId)} — ⚠️ {respConflict.message}</span></div>}
-                                {task.responsableId && !respConflict.hasConflict && <div className="flex items-center gap-1 text-gray-600"><User className="h-3 w-3" /> Responsable : {getMemberName(task.responsableId)}{required.length > 0 && <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${getMemberSkillMatch(teamMembers.find(m => m.id === task.responsableId)!, task) >= 80 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{getMemberSkillMatch(teamMembers.find(m => m.id === task.responsableId)!, task)}% compétences</span>}</div>}
-                                {task.testeurId && !testConflict.hasConflict && <div className="flex items-center gap-1 text-gray-600"><CheckCircle className="h-3 w-3" /> Testeur : {getMemberName(task.testeurId)}</div>}
-                              </div>
-                            )}
+                            <div className="flex flex-col gap-1 mt-2 text-xs">
+                              {task.responsableId && respConflict.hasConflict && (
+                                <div className="flex items-start gap-1 text-red-600 font-medium bg-red-50 px-2 py-1 rounded-lg border border-red-200">
+                                  <User className="h-3 w-3 shrink-0 mt-0.5" />
+                                  <span>Responsable : {getMemberName(task.responsableId)} — ⚠️ {respConflict.message}</span>
+                                </div>
+                              )}
+                              {task.responsableId && !respConflict.hasConflict && (
+                                <div className="flex items-center gap-1 text-gray-600">
+                                  <User className="h-3 w-3" /> Responsable : {getMemberName(task.responsableId)}
+                                  {required.length > 0 && (
+                                    <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${getMemberSkillMatch(teamMembers.find(m => m.id === task.responsableId)!, task) >= 80 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                                      {getMemberSkillMatch(teamMembers.find(m => m.id === task.responsableId)!, task)}% compétences
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+
+                              {chefProjet && task.testeurId === chefProjet.id && !testConflict.hasConflict && (
+                                <div className="flex items-center gap-1 text-gray-600">
+                                  <CheckCircle className="h-3 w-3" />
+                                  <span>Testeur : </span>
+                                  <span className="font-medium">{chefProjet.nomComplet}</span>
+                                  <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
+                                  <span className="text-xs text-gray-400">(par défaut)</span>
+                                </div>
+                              )}
+                              {task.testeurId && chefProjet && task.testeurId !== chefProjet.id && !testConflict.hasConflict && (
+                                <div className="flex items-center gap-1 text-gray-600">
+                                  <CheckCircle className="h-3 w-3" />
+                                  <span>Testeur : {getMemberName(task.testeurId)}</span>
+                                </div>
+                              )}
+                              {chefProjet && task.testeurId === chefProjet.id && testConflict.hasConflict && (
+                                <div className="flex items-center gap-1 text-red-600 font-medium bg-red-50 px-2 py-1 rounded-lg border border-red-200">
+                                  <CheckCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                  <span>Chef ({chefProjet.nomComplet}) : ⚠️ {testConflict.message}</span>
+                                </div>
+                              )}
+                              {!chefProjet && !task.testeurId && (
+                                <div className="flex items-center gap-1 text-orange-500">
+                                  <AlertCircle className="h-3 w-3" />
+                                  <span>Aucun testeur (ajoutez un chef de projet)</span>
+                                </div>
+                              )}
+                            </div>
                           </div>
 
                           {expandedTasks.includes(task.id) && (
@@ -2156,28 +2241,28 @@ const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
           </Button>
         </div>
       </form>
-<AIPlanningModal
-  isOpen={showAIModal}
-  onClose={() => setShowAIModal(false)}
-  onApply={applyAIPlanning}
-  input={{
-    projetNom: formData.nom,
-    projetDescription: formData.description,
-    typeProjet: formData.typeProjet,
-    dateDebut: formData.dateDebut,
-    dateFinPrevue: formData.dateFinPrevue,
-    budgetEstime: parseFloat(formData.budgetEstime) || 0,
-    equipeDisponible: teamMembers.map(m => ({
-      id: m.id,
-      nom: m.nomComplet,
-      competences: employeCompetences.get(m.id) || m.specialites || [],
-    })),
-    joursFeries: joursFeries.map(jf => jf.date), // Passer les jours fériés
-  }}
-/>
 
-<MemberCompetenceModal />
-<CompetenceModal />
+      <AIPlanningModal
+        isOpen={showAIModal}
+        onClose={() => setShowAIModal(false)}
+        onApply={applyAIPlanning}
+        input={{
+          projetNom: formData.nom,
+          projetDescription: formData.description,
+          typeProjet: formData.typeProjet,
+          dateDebut: formData.dateDebut,
+          dateFinPrevue: formData.dateFinPrevue,
+          budgetEstime: parseFloat(formData.budgetEstime) || 0,
+          equipeDisponible: teamMembers.map(m => ({
+            id: m.id,
+            nom: m.nomComplet,
+            competences: employeCompetences.get(m.id) || m.specialites || [],
+          })),
+          joursFeries: joursFeries.map(jf => jf.date),
+          projetId: project?.id
+        }}
+      />
+
       <MemberCompetenceModal />
       <CompetenceModal />
     </div>

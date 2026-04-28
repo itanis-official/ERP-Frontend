@@ -26,6 +26,7 @@ import {
   RefreshCw,
 } from "lucide-react"
 import { getMesProjetsChef } from "../services/projectService"
+import { getTypesProjet, type TypeProjet } from "../services/typeProjetService"
 
 // ================= TYPES =================
 type ProjectStatut = 'Planifié' | 'En cours' | 'Terminé' | 'Annulé' | 'En retard'
@@ -162,20 +163,21 @@ const getProgressColor = (progress: number) => {
   return 'bg-red-500'
 }
 
-// Types pour les filtres
-type FiltreTypeProjet = 'all' | 'Développement Web' | 'Développement Mobile' | 'Design UI/UX' | 'Consulting' | 'IT'
+// Types pour les filtres (maintenant dynamiques)
 type FiltreBudget = 'all' | '< 50k' | '50k - 100k' | '100k - 200k' | '> 200k'
 type FiltreDate = 'all' | 'ce-mois' | 'ce-trimestre' | 'cette-annee' | 'annee-passee'
 
 export default function ProjectsView() {
   const [projects, setProjects] = useState<Projet[]>([])
+  const [typesProjet, setTypesProjet] = useState<TypeProjet[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingTypes, setLoadingTypes] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<ProjectStatut | "All">("All")
   
-  // Nouveaux filtres
-  const [typeProjetFilter, setTypeProjetFilter] = useState<FiltreTypeProjet>('all')
+  // Filtres dynamiques
+  const [typeProjetFilter, setTypeProjetFilter] = useState<string>('all')
   const [budgetFilter, setBudgetFilter] = useState<FiltreBudget>('all')
   const [dateFilter, setDateFilter] = useState<FiltreDate>('all')
   
@@ -202,17 +204,31 @@ export default function ProjectsView() {
     }
   }, [])
 
+  const fetchTypesProjet = useCallback(async () => {
+    try {
+      setLoadingTypes(true)
+      const types = await getTypesProjet()
+      setTypesProjet(types)
+    } catch (e) {
+      console.error("Erreur lors du chargement des types de projet:", e)
+    } finally {
+      setLoadingTypes(false)
+    }
+  }, [])
+
   // ================= RAFRAÎCHISSEMENT AUTOMATIQUE =================
   
   useEffect(() => {
     fetchProjects()
-  }, [fetchProjects])
+    fetchTypesProjet()
+  }, [fetchProjects, fetchTypesProjet])
 
   const handleVisibilityChange = useCallback(() => {
     if (document.visibilityState === 'visible') {
       fetchProjects()
+      fetchTypesProjet()
     }
-  }, [fetchProjects])
+  }, [fetchProjects, fetchTypesProjet])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -225,7 +241,10 @@ export default function ProjectsView() {
 
   useEffect(() => {
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    const handleProjectUpdate = () => fetchProjects()
+    const handleProjectUpdate = () => {
+      fetchProjects()
+      fetchTypesProjet()
+    }
     window.addEventListener('project-updated', handleProjectUpdate)
     window.addEventListener('project-deleted', handleProjectUpdate)
     
@@ -234,15 +253,13 @@ export default function ProjectsView() {
       window.removeEventListener('project-updated', handleProjectUpdate)
       window.removeEventListener('project-deleted', handleProjectUpdate)
     }
-  }, [fetchProjects, handleVisibilityChange])
+  }, [fetchProjects, fetchTypesProjet, handleVisibilityChange])
 
   useEffect(() => {
     if (!editingProjectId && !selectedProjectId && !loading) {
       fetchProjects()
     }
   }, [editingProjectId, selectedProjectId, loading, fetchProjects])
-
-
 
   // ================= STATS =================
   const active = projects.filter(p => p.statut === 'En cours').length
@@ -262,7 +279,7 @@ export default function ProjectsView() {
     // Filtre statut
     const matchStatus = statusFilter === "All" || p.statut === statusFilter
     
-    // Filtre type de projet
+    // Filtre type de projet (dynamique)
     const matchTypeProjet = typeProjetFilter === 'all' || p.typeProjet === typeProjetFilter
     
     // Filtre budget
@@ -373,6 +390,12 @@ export default function ProjectsView() {
     setEditingProjectId(null)
     fetchProjects()
   }, [fetchProjects])
+
+  // Obtenir le label du type de projet pour l'affichage
+  const getTypeProjetLabel = (value: string): string => {
+    const type = typesProjet.find(t => t.value === value)
+    return type?.label || value
+  }
 
   if (loading) {
     return (
@@ -492,6 +515,19 @@ export default function ProjectsView() {
             >
               <Filter className="h-4 w-4" />
             </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                fetchProjects()
+                fetchTypesProjet()
+              }}
+              disabled={refreshing}
+              className="border-gray-200"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </Button>
           </div>
         </div>
 
@@ -499,24 +535,28 @@ export default function ProjectsView() {
         {showFilters && (
           <div className="mt-4 pt-4 border-t border-gray-100">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Filtre Type de projet */}
+              {/* Filtre Type de projet (DYNAMIQUE) */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Type de projet</label>
                 <select
                   value={typeProjetFilter}
                   onChange={(e) => {
-                    setTypeProjetFilter(e.target.value as FiltreTypeProjet)
+                    setTypeProjetFilter(e.target.value)
                     setCurrentPage(1)
                   }}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white"
+                  disabled={loadingTypes}
                 >
                   <option value="all">Tous les types</option>
-                  <option value="Développement Web">Développement Web</option>
-                  <option value="Développement Mobile">Développement Mobile</option>
-                  <option value="Design UI/UX">Design UI/UX</option>
-                  <option value="Consulting">Consulting</option>
-                  <option value="IT">IT</option>
+                  {typesProjet.map(type => (
+                    <option key={type.id} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
                 </select>
+                {loadingTypes && (
+                  <p className="text-xs text-gray-400 mt-1">Chargement des types...</p>
+                )}
               </div>
 
               {/* Filtre Budget */}
@@ -564,7 +604,7 @@ export default function ProjectsView() {
                 <span className="text-xs text-gray-500">Filtres actifs :</span>
                 {typeProjetFilter !== 'all' && (
                   <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
-                    Type: {typeProjetFilter}
+                    Type: {typesProjet.find(t => t.value === typeProjetFilter)?.label || typeProjetFilter}
                   </span>
                 )}
                 {budgetFilter !== 'all' && (
@@ -642,7 +682,7 @@ export default function ProjectsView() {
                       <span className="font-medium">{project.budgetEstime.toLocaleString()} MAD</span>
                     </div>
                     <div className="text-xs text-gray-500">
-                      {project.typeProjet}
+                      {getTypeProjetLabel(project.typeProjet)}
                     </div>
                   </div>
 
@@ -687,7 +727,6 @@ export default function ProjectsView() {
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    
                   </div>
                 </div>
               </Card>
@@ -715,6 +754,7 @@ export default function ProjectsView() {
                   </th>
                   <th className="px-4 py-3 text-left">Client</th>
                   <th className="px-4 py-3 text-left">Lieu</th>
+                  <th className="px-4 py-3 text-left">Type</th>
                   <th className="px-4 py-3 text-left">
                     <button onClick={() => handleSort("budget")} className="flex items-center gap-1 text-xs font-medium text-gray-600 uppercase hover:text-[#ef7c21]">
                       Budget <ArrowUpDown className="h-3 w-3" />
@@ -736,15 +776,18 @@ export default function ProjectsView() {
                       <td className="px-4 py-3">
                         <div className="font-medium text-gray-900">{project.nom}</div>
                         <div className="text-xs text-gray-500 truncate max-w-xs">{project.description}</div>
-                        <div className="text-xs text-gray-400 mt-1">{project.typeProjet}</div>
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={getStatusVariant(project.statut)} className={`${getStatusColor(project.statut)} rounded-full px-2 py-0.5 text-xs`}>
                           {project.statut}
                         </Badge>
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">{project.client?.nom || "-"}</td>
+                      </td>                      <td className="px-4 py-3 text-gray-600">{project.client?.nom || "-"}</td>
                       <td className="px-4 py-3 text-gray-600">{project.lieu || "-"}</td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs px-2 py-1 bg-gray-100 rounded-full">
+                          {getTypeProjetLabel(project.typeProjet)}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 font-medium text-gray-700">{project.budgetEstime.toLocaleString()} MAD</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-center gap-2">
@@ -762,7 +805,6 @@ export default function ProjectsView() {
                           <Button variant="ghost" size="sm" className="p-1.5 text-gray-400 hover:text-[#ef7c21]" onClick={() => setEditingProjectId(project.id)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          
                         </div>
                       </td>
                     </tr>

@@ -499,10 +499,7 @@ export function TimesheetView() {
                 {subtask.estEnRetard && <AlertTriangle className="h-3 w-3 text-red-500 flex-shrink-0" />}
               </div>
               <div className="flex items-center justify-between mt-1 text-[9px] opacity-75">
-                <div className="flex items-center gap-1">
-                  <User className="h-2.5 w-2.5" />
-                  <span className="truncate max-w-[50px]" title={subtask.employeNom}>{getInitials(subtask.employeNom)}</span>
-                </div>
+                
                 <span>{progress}%</span>
               </div>
               
