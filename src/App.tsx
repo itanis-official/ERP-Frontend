@@ -1,3 +1,5 @@
+import { AuthProvider } from './app/contexts/AuthContext'
+import { AppRoutes } from './app/routes'
 import React, { useState } from 'react'
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom"
 import { Sidebar } from './pages/Sidebar'
@@ -165,7 +167,13 @@ function App() {
     return <LoginPage onLogin={handleLogin} />
   }
 
+export default function App() {
   return (
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
+  )
+}
     <AuthenticatedLayout user={user} onLogout={handleLogout}>
       <Routes>
         <Route path="/" element={<Navigate to="/projets" replace />} />
