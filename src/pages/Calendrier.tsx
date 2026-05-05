@@ -161,7 +161,7 @@ const normalizeStatus = (apiStatus: string | undefined): SubTaskStatus => {
 }
 
 // Composant principal
-export function TimesheetView() {
+export function calendrierView() {
   // États
   const [currentDate, setCurrentDate] = useState(new Date())
   const [viewMode, setViewMode] = useState<ViewMode>('month')
@@ -1045,4 +1045,4 @@ export function TimesheetView() {
   )
 }
 
-export default TimesheetView
+export default calendrierView

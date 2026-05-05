@@ -1,4 +1,3 @@
-// services/competenceService.ts
 import api from './api'
 
 export interface Competence {

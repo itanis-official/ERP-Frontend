@@ -1,4 +1,3 @@
-// src/services/typeProjetService.ts
 import api from './api'
 
 export interface TypeProjet {
@@ -11,7 +10,6 @@ export interface TypeProjet {
   updatedAt: string
 }
 
-// Récupérer tous les types de projet actifs
 export const getTypesProjet = async (): Promise<TypeProjet[]> => {
   try {
     const response = await api.get('/TypesProjet')

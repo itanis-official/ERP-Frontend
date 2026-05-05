@@ -38,7 +38,10 @@ import {
   Tag,
   Award,
   BarChart2,
-  Sparkles
+  Sparkles,
+  Download,
+  FileText,
+  Upload,
 } from 'lucide-react'
 import {
   getProjetById,
@@ -46,6 +49,10 @@ import {
   addProjectMembers,
   removeProjectMember,
   getAvailableMembers,
+  uploadCdcFile,
+  deleteCdcFile,
+  downloadCdcFile,
+  checkCdcExists,
 } from '../services/projectService'
 import { AIPlanningModal } from './Aiplanningmodal'
 import type { PhaseGeneree } from '../services/aiPlanningService'
@@ -62,7 +69,7 @@ import {
   fetchTunisiaHolidays,
   fetchHolidaysForRange,
 } from '../services/holidayService'
-import api from '../services/api'
+import { getTypesProjet, type TypeProjet } from '../services/typeProjetService'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -133,13 +140,6 @@ interface EditProjectViewProps {
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
-const PROJECT_TYPES = [
-  { id: 'mobile', name: 'Développement Mobile', icon: Smartphone },
-  { id: 'web', name: 'Développement Web', icon: Code },
-  { id: 'design', name: 'Design UI/UX', icon: PenTool },
-  { id: 'consulting', name: 'Consulting', icon: Briefcase },
-]
-
 const PHASE_TYPES: TypePhase[] = [
   'Analyse', 'Conception', 'MiseEnOeuvre', 'Validation', 'MiseEnService',
 ]
@@ -157,6 +157,16 @@ const NIVEAU_COLOR: Record<NiveauCompetence, string> = {
   Débutant: 'bg-blue-100 text-blue-700',
   Intermédiaire: 'bg-yellow-100 text-yellow-700',
   Expert: 'bg-green-100 text-green-700',
+}
+
+// Mapping des icônes pour les types de projet
+const getProjectTypeIcon = (typeValue: string): { icon: React.ElementType; color: string; bg: string } => {
+  const typeLower = typeValue.toLowerCase()
+  if (typeLower.includes('web')) return { icon: Code, color: 'text-[#ef7c21]', bg: 'bg-orange-50' }
+  if (typeLower.includes('mobile')) return { icon: Smartphone, color: 'text-[#ef7c21]', bg: 'bg-orange-50' }
+  if (typeLower.includes('design')) return { icon: PenTool, color: 'text-[#ef7c21]', bg: 'bg-orange-50' }
+  if (typeLower.includes('consulting')) return { icon: Briefcase, color: 'text-[#ef7c21]', bg: 'bg-orange-50' }
+  return { icon: Briefcase, color: 'text-[#ef7c21]', bg: 'bg-orange-50' }
 }
 
 // ─── Composant principal ──────────────────────────────────────────────────────
@@ -182,14 +192,27 @@ export function EditProjectView({
   const [removingMemberId, setRemovingMemberId] = useState<number | null>(null)
   const [loads, setLoads] = useState<GlobalLoad[]>([])
   const [overloaded, setOverloaded] = useState<any[]>([])
-  const [suggestions, setSuggestions] = useState<any[]>([])
   const [showValidatedSubtasks, setShowValidatedSubtasks] = useState(true)
   const [showAIModal, setShowAIModal] = useState(false)
+  const [selectedAIModel, setSelectedAIModel] = useState<string>('llama-3.1-8b-instant')
 
-  // ── Chef de projet (depuis GroupesEquipe.ChefEquipeId) ──────────────
+  // ── Types de projet dynamiques ──────────────────────────────────────────
+  const [projectTypes, setProjectTypes] = useState<TypeProjet[]>([])
+  const [loadingTypes, setLoadingTypes] = useState(true)
+
+  // ── Cahier des charges ──────────────────────────────────────────────────
+  const [cdcFile, setCdcFile] = useState<File | null>(null)
+  const [cdcUrl, setCdcUrl] = useState<string | null>(null)
+  const [cdcExists, setCdcExists] = useState(false)
+  const [isUploadingCdc, setIsUploadingCdc] = useState(false)
+  const [cdcUploadProgress, setCdcUploadProgress] = useState(0)
+  const [isDeletingCdc, setIsDeletingCdc] = useState(false)
+  const [isDownloadingCdc, setIsDownloadingCdc] = useState(false)
+
+  // ── Chef de projet ──────────────────────────────────────────────────────
   const [chefEquipeId, setChefEquipeId] = useState<number | null>(null)
 
-  // ── Jours fériés (API dynamique) ─────────────────────────────────────────
+  // ── Jours fériés ────────────────────────────────────────────────────────
   const [joursFeries, setJoursFeries] = useState<JourFerie[]>([])
   const [isLoadingHolidays, setIsLoadingHolidays] = useState(false)
   const [holidayYear, setHolidayYear] = useState(new Date().getFullYear())
@@ -214,12 +237,11 @@ export function EditProjectView({
     nom: '', description: '', clientId: '', lieu: '',
     dateDebut: '', dateFinPrevue: '',
     budgetEstime: '', budgetReel: '',
-    typeProjet: 'Développement Web',
+    typeProjet: '',
     statut: 'Planifié' as ProjectStatut,
   })
   const [phases, setPhases] = useState<Phase[]>([])
   const [availableMembers, setAvailableMembers] = useState<TeamMember[]>([])
-  const [loadingMembers, setLoadingMembers] = useState(false)
 
   // ==================== CHEF DE PROJET ====================
   const chefProjet = useMemo(() => {
@@ -236,21 +258,50 @@ export function EditProjectView({
     )
   }, [teamMembers, chefEquipeId])
 
-  // ==================== JOURS FÉRIÉS API ====================
+  // ==================== CHARGEMENT DES TYPES DE PROJET ====================
+  useEffect(() => {
+    const loadProjectTypes = async () => {
+      try {
+        setLoadingTypes(true)
+        const types = await getTypesProjet()
+        if (types && types.length > 0) {
+          setProjectTypes(types)
+          if (!formData.typeProjet && types.length > 0) {
+            setFormData(prev => ({ ...prev, typeProjet: types[0].value }))
+          }
+        }
+      } catch (error) {
+        console.error('Erreur chargement types de projet:', error)
+        const defaultTypes = [
+          { id: 1, typeProjetGuid: 'web', value: 'Développement Web', label: 'Développement Web', isActive: true, ordre: 1, updatedAt: '' },
+          { id: 2, typeProjetGuid: 'mobile', value: 'Développement Mobile', label: 'Développement Mobile', isActive: true, ordre: 2, updatedAt: '' },
+          { id: 3, typeProjetGuid: 'design', value: 'Design UI/UX', label: 'Design UI/UX', isActive: true, ordre: 3, updatedAt: '' },
+          { id: 4, typeProjetGuid: 'consulting', value: 'Consulting', label: 'Consulting', isActive: true, ordre: 4, updatedAt: '' },
+          { id: 5, typeProjetGuid: 'it', value: 'IT', label: 'IT', isActive: true, ordre: 5, updatedAt: '' },
+        ]
+        setProjectTypes(defaultTypes)
+        if (!formData.typeProjet && defaultTypes.length > 0) {
+          setFormData(prev => ({ ...prev, typeProjet: defaultTypes[0].value }))
+        }
+      } finally {
+        setLoadingTypes(false)
+      }
+    }
+    loadProjectTypes()
+  }, [])
 
+  // ==================== JOURS FÉRIÉS ====================
   const loadHolidaysFromAPI = useCallback(async (year: number) => {
     try {
       setIsLoadingHolidays(true)
       setHolidayError(null)
       const holidays = await fetchTunisiaHolidays(year)
-
       const mappedHolidays: JourFerie[] = holidays.map(holiday => ({
         id: `holiday-${holiday.date}`,
         date: holiday.date,
         nom: holiday.localName || holiday.name,
         recurrent: holiday.fixed || false,
       }))
-
       setJoursFeries(mappedHolidays)
     } catch (err) {
       console.error('Erreur chargement jours fériés:', err)
@@ -266,14 +317,12 @@ export function EditProjectView({
       setIsLoadingHolidays(true)
       setHolidayError(null)
       const holidays = await fetchHolidaysForRange(startDate, endDate)
-
       const mappedHolidays: JourFerie[] = holidays.map(holiday => ({
         id: `holiday-${holiday.date}`,
         date: holiday.date,
         nom: holiday.localName || holiday.name,
         recurrent: holiday.fixed || false,
       }))
-
       setJoursFeries(mappedHolidays)
     } catch (err) {
       console.error('Erreur chargement jours fériés:', err)
@@ -287,12 +336,10 @@ export function EditProjectView({
     const mm = String(date.getMonth() + 1).padStart(2, '0')
     const dd = String(date.getDate()).padStart(2, '0')
     const yyyy = date.getFullYear()
-
     return joursFeries.some(jf => {
       if (jf.recurrent) {
         const jfMmDd = jf.date.slice(5)
-        const currentMmDd = `${mm}-${dd}`
-        return jfMmDd === currentMmDd
+        return jfMmDd === `${mm}-${dd}`
       } else {
         return jf.date === `${yyyy}-${mm}-${dd}`
       }
@@ -308,21 +355,16 @@ export function EditProjectView({
     let count = 0
     const current = new Date(start)
     const endDate = new Date(end)
-
     while (current <= endDate) {
-      if (isWorkDay(new Date(current))) {
-        count++
-      }
+      if (isWorkDay(new Date(current))) count++
       current.setDate(current.getDate() + 1)
     }
-
     return Math.max(1, count)
   }, [isWorkDay])
 
   const getFeriesInRange = useCallback((start: Date, end: Date): JourFerie[] => {
     const result: JourFerie[] = []
     const uniqueDates = new Set<string>()
-
     joursFeries.forEach(jf => {
       if (jf.recurrent) {
         const mmdd = jf.date.slice(5)
@@ -349,13 +391,12 @@ export function EditProjectView({
         }
       }
     })
-
     return result
   }, [joursFeries])
 
-  const joursFeriesSorted = useMemo(() => {
-    return [...joursFeries].sort((a, b) => a.date.localeCompare(b.date))
-  }, [joursFeries])
+  const joursFeriesSorted = useMemo(() =>
+    [...joursFeries].sort((a, b) => a.date.localeCompare(b.date)),
+    [joursFeries])
 
   const holidaysByMonth = useMemo(() => {
     const groups: Record<string, JourFerie[]> = {}
@@ -368,7 +409,6 @@ export function EditProjectView({
   }, [joursFeriesSorted])
 
   // ==================== COMPÉTENCES ====================
-
   const loadEmployeCompetences = useCallback(async (employeId: number) => {
     try {
       const data = await getCompetencesByEmploye(employeId)
@@ -424,13 +464,14 @@ export function EditProjectView({
       setShowAddComp(false)
     } catch (err) {
       console.error('Erreur ajout compétence:', err)
-      alert('Erreur lors de l\'ajout de la compétence')
+      alert("Erreur lors de l'ajout de la compétence")
     }
   }
 
   const removeCompetence = async (id: string) => {
     const competence = competences.find(c => c.id === id)
     if (!competence) return
+    if (!window.confirm(`Supprimer la compétence "${competence.nom}" ?`)) return
     try {
       await supprimerCompetence(parseInt(id))
       setCompetences(prev => prev.filter(c => c.id !== id))
@@ -458,7 +499,7 @@ export function EditProjectView({
       alert('Compétence assignée avec succès')
     } catch (err) {
       console.error('Erreur assignation compétence:', err)
-      alert('Erreur lors de l\'assignation')
+      alert("Erreur lors de l'assignation")
     }
   }
 
@@ -527,7 +568,6 @@ export function EditProjectView({
   }, [competencesFiltrees])
 
   // ==================== UTILITAIRES ====================
-
   const isSubTaskValidated = (statut: string) =>
     statut === 'Validee' || statut === 'validée' || statut === 'VALIDEE'
 
@@ -566,7 +606,6 @@ export function EditProjectView({
   }
 
   // ==================== VALIDATION DATES ====================
-
   const validateTaskDates = (start: string, end: string): boolean => {
     if (!formData.dateDebut || !formData.dateFinPrevue) {
       alert("⚠️ Définissez d'abord les dates du projet.")
@@ -621,26 +660,22 @@ export function EditProjectView({
     return true
   }
 
-  // ==================== LOGIQUE DE CHARGE ====================
-
+  // ==================== LOAD BALANCING ====================
   const getExistingDailyLoad = useCallback((memberId: number, date: Date, excludeTaskId?: string): number => {
     if (!isWorkDay(date)) return 0
     let total = 0
-
     loads.forEach((load: GlobalLoad) => {
       if (load.employeId !== memberId) return
       if (project && load.projetId === project.id) return
-
       const loadDate = new Date(load.date)
       if (loadDate.toDateString() === date.toDateString()) {
         total += load.totalHeures
       }
     })
-
     phases.forEach(phase => {
       phase.taches.forEach(task => {
         if (excludeTaskId && task.id === excludeTaskId) return
-        if (task.responsableId !== memberId && task.testeurId !== memberId) return
+        if (task.responsableId !== memberId) return
         const s = new Date(task.dateDebutPrevue), e = new Date(task.dateFinPrevue)
         if (date < s || date > e) return
         const h = task.sousTaches.filter(st => !isSubTaskValidated(st.statut)).reduce((sum, st) => sum + st.dureeEstimeeHeures, 0)
@@ -648,7 +683,6 @@ export function EditProjectView({
         total += h / wd
       })
     })
-
     return total
   }, [loads, phases, isWorkDay, countWorkDays, project])
 
@@ -679,26 +713,22 @@ export function EditProjectView({
       const cur = new Date(d)
       if (!isWorkDay(cur)) continue
       const existing = getExistingDailyLoad(memberId, cur, excludeTaskId)
-      if (existing >= MAX_HOURS_PER_DAY) {
-        blockedDaysCount++
-      }
+      if (existing >= MAX_HOURS_PER_DAY) blockedDaysCount++
     }
 
     const availableWorkDays = totalWorkDays - blockedDaysCount
 
     if (availableWorkDays <= 0) {
       return {
-        hasConflict: true,
-        conflictingDates: [],
+        hasConflict: true, conflictingDates: [],
         message: "Aucun jour ouvré disponible pour cette période",
-        suggestedAction: "Déplacer la tâche ou changer l'employé",
-        dailyLoad: 0
+        suggestedAction: "Déplacer la tâche ou changer le responsable",
+        dailyLoad: 0,
       }
     }
 
     const totalHours = getRemainingTaskHours(task)
     const effectiveDailyContribution = totalHours / availableWorkDays
-
     const conflictingDates: string[] = []
 
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
@@ -706,44 +736,36 @@ export function EditProjectView({
       if (!isWorkDay(cur)) continue
       const existing = getExistingDailyLoad(memberId, cur, excludeTaskId)
       if (existing >= MAX_HOURS_PER_DAY) continue
-      const total = existing + effectiveDailyContribution
-      if (total > MAX_HOURS_PER_DAY) {
-        conflictingDates.push(`${cur.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} (${total.toFixed(1)}h > ${MAX_HOURS_PER_DAY}h)`)
+      const totalLoad = existing + effectiveDailyContribution
+      if (totalLoad > MAX_HOURS_PER_DAY) {
+        conflictingDates.push(`${cur.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} (${totalLoad.toFixed(1)}h > ${MAX_HOURS_PER_DAY}h)`)
       }
     }
 
     let message = ''
-    if (conflictingDates.length === 1) message = `Dépasse 8h le ${conflictingDates[0]}`
-    else if (conflictingDates.length > 1 && conflictingDates.length <= 3) message = `Dépasse 8h les : ${conflictingDates.join(', ')}`
-    else if (conflictingDates.length > 3) message = `Dépasse 8h sur ${conflictingDates.length} jours ouvrés`
-    else if (blockedDaysCount > 0) {
-      message = `Charge ajustée : ${totalHours}h réparties sur ${availableWorkDays}j disponibles (${blockedDaysCount}j saturés exclus)`
-    }
+    if (conflictingDates.length === 1) message = `Dépasse ${MAX_HOURS_PER_DAY}h le ${conflictingDates[0]}`
+    else if (conflictingDates.length > 1 && conflictingDates.length <= 3) message = `Dépasse ${MAX_HOURS_PER_DAY}h les : ${conflictingDates.join(', ')}`
+    else if (conflictingDates.length > 3) message = `Dépasse ${MAX_HOURS_PER_DAY}h sur ${conflictingDates.length} jours ouvrés`
+    else if (blockedDaysCount > 0) message = `Charge ajustée : ${totalHours}h réparties sur ${availableWorkDays}j disponibles (${blockedDaysCount}j saturés exclus)`
 
     let suggestedAction = ''
-    if (conflictingDates.length > 0) {
-      suggestedAction = `Réduire la charge ou augmenter la durée de la tâche`
-    } else if (blockedDaysCount > 0) {
-      suggestedAction = `L'employé est déjà occupé certains jours, la charge est concentrée sur ses jours libres.`
-    }
+    if (conflictingDates.length > 0) suggestedAction = `Réduire la charge ou augmenter la durée de la tâche`
+    else if (blockedDaysCount > 0) suggestedAction = `Le responsable est déjà occupé certains jours, la charge est concentrée sur ses jours libres.`
 
-    return {
-      hasConflict: conflictingDates.length > 0,
-      conflictingDates,
-      message,
-      suggestedAction,
-      dailyLoad: effectiveDailyContribution
-    }
+    return { hasConflict: conflictingDates.length > 0, conflictingDates, message, suggestedAction, dailyLoad: effectiveDailyContribution }
   }, [getExistingDailyLoad, isWorkDay, countWorkDays, getRemainingTaskHours])
 
   const validateAllAssignments = useCallback((): boolean => {
     for (const phase of phases) {
       for (const task of phase.taches) {
-        for (const [role, id] of [['RESPONSABLE', task.responsableId], ['TESTEUR', task.testeurId]] as const) {
-          if (!id) continue
-          const c = getAssignmentConflict(id, task, task.id)
+        if (task.responsableId) {
+          const c = getAssignmentConflict(task.responsableId, task, task.id)
           if (c.hasConflict) {
-            alert(`⛔ ${role} "${getMemberName(id)}"\n${c.message}${c.suggestedAction ? '\n💡 ' + c.suggestedAction : ''}\n\n📋 "${task.titre}"\n📅 ${task.dateDebutPrevue} → ${task.dateFinPrevue}`)
+            alert(
+              `⛔ RESPONSABLE "${getMemberName(task.responsableId)}"\n` +
+              `${c.message}${c.suggestedAction ? '\n💡 ' + c.suggestedAction : ''}\n\n` +
+              `📋 "${task.titre}"\n📅 ${task.dateDebutPrevue} → ${task.dateFinPrevue}`
+            )
             return false
           }
         }
@@ -752,8 +774,7 @@ export function EditProjectView({
     return true
   }, [phases, getAssignmentConflict, getMemberName])
 
-  // ==================== CHARGEMENT ====================
-
+  // ==================== CHARGEMENT INITIAL ====================
   useEffect(() => {
     const fetchMultiProjectData = async () => {
       if (initialLoading) return
@@ -783,23 +804,20 @@ export function EditProjectView({
         setAvailableMembers(membersData.map(mapEmployee))
 
         if (competencesData && competencesData.length > 0) {
-          const mappedCompetences: Competence[] = competencesData.map((c: ApiCompetence) => ({
+          setCompetences(competencesData.map((c: ApiCompetence) => ({
             id: c.id.toString(),
             nom: c.nom,
             categorie: c.categorie,
             niveau: c.niveau as NiveauCompetence,
             description: c.description,
-          }))
-          setCompetences(mappedCompetences)
+          })))
         }
         setIsLoadingCompetences(false)
 
         if (projectData) {
           setProject(projectData)
 
-          const chefId = projectData.groupeEquipe?.chefEquipeId
-            || projectData.groupeEquipe?.chefEquipe?.id
-            || null
+          const chefId = projectData.groupeEquipe?.chefEquipeId || projectData.groupeEquipe?.chefEquipe?.id || null
           setChefEquipeId(chefId)
 
           setFormData({
@@ -811,16 +829,24 @@ export function EditProjectView({
             dateFinPrevue: projectData.dateFinPrevue?.split('T')[0] || '',
             budgetEstime: projectData.budgetEstime?.toString() || '',
             budgetReel: projectData.budgetReel?.toString() || '',
-            typeProjet: projectData.typeProjet || 'Développement Web',
+            typeProjet: projectData.typeProjet || (projectTypes.length > 0 ? projectTypes[0].value : 'Développement Web'),
             statut: projectData.statut || 'Planifié',
           })
+
+          const projId = projectData.id || projectId
+          if (projId) {
+            checkCdcExists(parseInt(projId)).then(exists => {
+              setCdcExists(exists)
+              if (exists) setCdcUrl(`/api/Projets/${projId}/cdc/download`)
+            }).catch(() => {})
+          }
 
           const mappedPhases = PHASE_TYPES.map(type => {
             const existing = projectData.phases?.find((p: any) => p.typePhase === type)
             return existing
               ? {
                   id: existing.id?.toString() || genId(),
-                  typePhase: existing.typePhase,
+                  typePhase: existing.typePhase as TypePhase,
                   pourcentageBudget: existing.pourcentageBudget || 0,
                   statut: existing.statut || 'AFaire',
                   taches: (existing.taches || []).map((t: any) => ({
@@ -844,6 +870,7 @@ export function EditProjectView({
           })
           setPhases(mappedPhases)
           setExpandedPhases(mappedPhases.map(p => p.id))
+
           const mappedTeam = projectData.groupeEquipe?.employes?.map(mapEmployee) || []
           setTeamMembers(mappedTeam)
           for (const member of mappedTeam) {
@@ -857,39 +884,78 @@ export function EditProjectView({
       }
     }
     init()
-  }, [projectId, propProject, loadEmployeCompetences])
+  }, [projectId, propProject, loadEmployeCompetences, projectTypes])
 
-  // Load holidays when project dates change
   useEffect(() => {
     const loadProjectHolidays = async () => {
       if (formData.dateDebut && formData.dateFinPrevue) {
-        const start = new Date(formData.dateDebut)
-        const end = new Date(formData.dateFinPrevue)
-        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-          await loadHolidaysForDateRange(start, end)
-        }
+        const start = new Date(formData.dateDebut), end = new Date(formData.dateFinPrevue)
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) await loadHolidaysForDateRange(start, end)
       }
     }
     loadProjectHolidays()
   }, [formData.dateDebut, formData.dateFinPrevue, loadHolidaysForDateRange])
 
-  // Assigner automatiquement le chef comme testeur UNIQUEMENT pour les tâches sans testeur
   useEffect(() => {
     if (!chefProjet) return
-
     setPhases(prev => prev.map(p => ({
       ...p,
-      taches: p.taches.map(t => {
-        if (!t.testeurId) {
-          return { ...t, testeurId: chefProjet.id }
-        }
-        return t
-      })
+      taches: p.taches.map(t => !t.testeurId ? { ...t, testeurId: chefProjet.id } : t),
     })))
   }, [chefProjet])
 
-  // ==================== SOUMISSION ====================
+  // ==================== CAHIER DES CHARGES — HANDLERS ====================
+  const handleUploadCdc = async () => {
+    if (!cdcFile || !project?.id) return
+    setIsUploadingCdc(true)
+    setCdcUploadProgress(0)
+    try {
+      const result = await uploadCdcFile(project.id, cdcFile, (progress) => setCdcUploadProgress(progress))
+      setCdcUrl(result.fileUrl)
+      setCdcExists(true)
+      setCdcFile(null)
+      setCdcUploadProgress(0)
+      alert('✅ Cahier des charges téléchargé avec succès !')
+    } catch (err) {
+      console.error('Erreur upload CDC:', err)
+      alert("❌ Erreur lors de l'envoi du fichier. Vérifiez le format (PDF/DOCX) et réessayez.")
+    } finally {
+      setIsUploadingCdc(false)
+    }
+  }
 
+  const handleDownloadCdc = async () => {
+    if (!project?.id) return
+    setIsDownloadingCdc(true)
+    try {
+      await downloadCdcFile(project.id)
+    } catch (err) {
+      console.error('Erreur download CDC:', err)
+      alert("❌ Erreur lors du téléchargement du fichier.")
+    } finally {
+      setIsDownloadingCdc(false)
+    }
+  }
+
+  const handleDeleteCdc = async () => {
+    if (!project?.id) return
+    if (!window.confirm('Supprimer le cahier des charges ? Cette action est irréversible.')) return
+    setIsDeletingCdc(true)
+    try {
+      await deleteCdcFile(project.id)
+      setCdcUrl(null)
+      setCdcExists(false)
+      setCdcFile(null)
+      alert('✅ Cahier des charges supprimé.')
+    } catch (err) {
+      console.error('Erreur suppression CDC:', err)
+      alert("❌ Erreur lors de la suppression du fichier.")
+    } finally {
+      setIsDeletingCdc(false)
+    }
+  }
+
+  // ==================== SOUMISSION ====================
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!project) return
@@ -943,7 +1009,6 @@ export function EditProjectView({
   }
 
   // ==================== ÉQUIPE ====================
-
   const addTeamMember = async (member: TeamMember) => {
     if (teamMembers.some(m => m.id === member.id)) { alert("Déjà dans l'équipe"); return }
     setAddingMembers(true)
@@ -965,11 +1030,7 @@ export function EditProjectView({
     try {
       if (project?.id) await removeProjectMember(project.id, id)
       setTeamMembers(teamMembers.filter(m => m.id !== id))
-      setEmployeCompetences(prev => {
-        const newMap = new Map(prev)
-        newMap.delete(id)
-        return newMap
-      })
+      setEmployeCompetences(prev => { const n = new Map(prev); n.delete(id); return n })
     } catch { alert('Erreur suppression') }
     finally { setRemovingMemberId(null) }
   }
@@ -983,7 +1044,6 @@ export function EditProjectView({
     )
 
   // ==================== PHASES & TÂCHES ====================
-
   const togglePhase = (id: string) =>
     setExpandedPhases(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
 
@@ -991,23 +1051,17 @@ export function EditProjectView({
     setExpandedTasks(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
 
   const addTask = (phaseId: string) => {
-    if (!formData.dateDebut || !formData.dateFinPrevue) { 
-      alert("⚠️ Définissez d'abord les dates du projet."); 
-      return 
-    }
+    if (!formData.dateDebut || !formData.dateFinPrevue) { alert("⚠️ Définissez d'abord les dates du projet."); return }
     const pS = new Date(formData.dateDebut), pE = new Date(formData.dateFinPrevue)
     let tE = new Date(pS)
     const dur = Math.min(8, Math.max(1, Math.floor((pE.getTime() - pS.getTime()) / 86_400_000)))
     tE.setDate(tE.getDate() + dur)
     if (tE > pE) tE = new Date(pE)
     const newTask: Tache = {
-      id: genId(), 
-      titre: 'Nouvelle tâche',
+      id: genId(), titre: 'Nouvelle tâche',
       dateDebutPrevue: pS.toISOString().split('T')[0],
       dateFinPrevue: tE.toISOString().split('T')[0],
-      statut: 'AFaire', 
-      responsableId: undefined, 
-      testeurId: chefProjet?.id,
+      statut: 'AFaire', responsableId: undefined, testeurId: chefProjet?.id,
       sousTaches: [{ id: genId(), titre: 'Nouvelle sous-tâche', dureeEstimeeHeures: 2, statut: 'AFaire' }],
       competencesRequises: [],
     }
@@ -1022,20 +1076,17 @@ export function EditProjectView({
         ...p,
         taches: p.taches.map(t => {
           if (t.id !== taskId) return t
-          let updated: Tache = { ...t, [field]: value }
+          const updated: Tache = { ...t, [field]: value }
           if (field === 'dateDebutPrevue' || field === 'dateFinPrevue') {
             const nS = field === 'dateDebutPrevue' ? value : t.dateDebutPrevue
             const nE = field === 'dateFinPrevue' ? value : t.dateFinPrevue
             if (nS && nE && !validateTaskDates(nS, nE)) return t
-            for (const [role, key] of [['RESPONSABLE', 'responsableId'], ['TESTEUR', 'testeurId']] as const) {
-              const mid = updated[key as keyof Tache] as number | undefined
-              if (mid) {
-                const c = getAssignmentConflict(mid, updated, taskId)
-                if (c.hasConflict) {
-                  alert(`⛔ ${role} "${getMemberName(mid)}" dépasserait 8h/jour.\n${c.message}\n↩️ Assignation retirée.`)
-                  updated = { ...updated, [key]: undefined }
-                }
-              }
+          }
+          if (field === 'responsableId' && value) {
+            const c = getAssignmentConflict(value, updated, taskId)
+            if (c.hasConflict) {
+              alert(`⛔ RESPONSABLE "${getMemberName(value)}" dépasserait ${MAX_HOURS_PER_DAY}h/jour.\n${c.message}\n${c.suggestedAction ? '\n💡 ' + c.suggestedAction : ''}\n\n↩️ Assignation refusée.`)
+              return t
             }
           }
           return updated
@@ -1075,49 +1126,31 @@ export function EditProjectView({
       ))
   }
 
+  // ==================== AI PLANNING ====================
   const applyAIPlanning = (aiPhases: PhaseGeneree[]) => {
-    if (!aiPhases || !Array.isArray(aiPhases) || aiPhases.length === 0) {
-      alert('Erreur : aucune phase générée.')
-      return
-    }
+    if (!aiPhases || !Array.isArray(aiPhases) || aiPhases.length === 0) { alert('Erreur : aucune phase générée.'); return }
 
     const PHASE_MAP: Record<string, TypePhase> = {
-      'analyse': 'Analyse',
-      'conception': 'Conception',
-      'design': 'Conception',
-      'planification': 'Analyse',
-      'développement': 'MiseEnOeuvre',
-      'developpement': 'MiseEnOeuvre',
-      'implementation': 'MiseEnOeuvre',
-      'implémentation': 'MiseEnOeuvre',
-      'coding': 'MiseEnOeuvre',
-      'réalisation': 'MiseEnOeuvre',
-      'realisation': 'MiseEnOeuvre',
-      'test': 'Validation',
-      'validation': 'Validation',
-      'recette': 'Validation',
-      'qualité': 'Validation',
-      'lancement': 'MiseEnService',
-      'déploiement': 'MiseEnService',
-      'deploiement': 'MiseEnService',
-      'mise en service': 'MiseEnService',
-      'livraison': 'MiseEnService',
-      'production': 'MiseEnService',
+      'analyse': 'Analyse', 'conception': 'Conception', 'design': 'Conception',
+      'planification': 'Analyse', 'développement': 'MiseEnOeuvre', 'developpement': 'MiseEnOeuvre',
+      'implementation': 'MiseEnOeuvre', 'implémentation': 'MiseEnOeuvre', 'coding': 'MiseEnOeuvre',
+      'réalisation': 'MiseEnOeuvre', 'realisation': 'MiseEnOeuvre',
+      'test': 'Validation', 'validation': 'Validation', 'recette': 'Validation',
+      'qualité': 'Validation', 'lancement': 'MiseEnService',
+      'déploiement': 'MiseEnService', 'deploiement': 'MiseEnService',
+      'mise en service': 'MiseEnService', 'livraison': 'MiseEnService', 'production': 'MiseEnService',
     }
 
     const resolvePhaseType = (nomIA: string): TypePhase => {
       const lower = nomIA.toLowerCase()
-      for (const [keyword, type] of Object.entries(PHASE_MAP)) {
-        if (lower.includes(keyword)) return type
-      }
+      for (const [keyword, type] of Object.entries(PHASE_MAP)) { if (lower.includes(keyword)) return type }
       return 'MiseEnOeuvre'
     }
 
     const tachesParPhase = new Map<TypePhase, typeof aiPhases[0]['taches']>()
     PHASE_TYPES.forEach(t => tachesParPhase.set(t, []))
-
     aiPhases.forEach(aiPhase => {
-      if (!aiPhase || !aiPhase.taches) return
+      if (!aiPhase?.taches) return
       const type = resolvePhaseType(aiPhase.typePhase)
       const existing = tachesParPhase.get(type) ?? []
       tachesParPhase.set(type, [...existing, ...aiPhase.taches])
@@ -1126,74 +1159,47 @@ export function EditProjectView({
     const newPhases: Phase[] = PHASE_TYPES.map(type => {
       const existingPhase = phases.find(p => p.typePhase === type)
       const aiTaches = tachesParPhase.get(type) ?? []
-
       const aiPhaseMatch = aiPhases.find(ap => resolvePhaseType(ap.typePhase) === type)
       const pct = aiPhaseMatch?.pourcentageBudget ?? existingPhase?.pourcentageBudget ?? Math.floor(100 / PHASE_TYPES.length)
-
       const taches = aiTaches.map(aiTask => {
         if (!aiTask) return null
         return {
-          id: genId(),
-          titre: aiTask.titre || 'Tâche sans titre',
+          id: genId(), titre: aiTask.titre || 'Tâche sans titre',
           dateDebutPrevue: aiTask.dateDebutPrevue || formData.dateDebut,
           dateFinPrevue: aiTask.dateFinPrevue || formData.dateFinPrevue,
-          statut: 'AFaire',
-          responsableId: aiTask.responsableId ?? undefined,
+          statut: 'AFaire', responsableId: aiTask.responsableId ?? undefined,
           testeurId: chefProjet?.id ?? aiTask.testeurId ?? undefined,
           competencesRequises: aiTask.competencesRequises || [],
-          sousTaches: (aiTask.sousTaches || []).map(st => ({
-            id: genId(),
-            titre: st.titre || 'Sous-tâche',
-            dureeEstimeeHeures: st.dureeEstimeeHeures || 1,
-            statut: 'AFaire',
-          })),
+          sousTaches: (aiTask.sousTaches || []).map(st => ({ id: genId(), titre: st.titre || 'Sous-tâche', dureeEstimeeHeures: st.dureeEstimeeHeures || 1, statut: 'AFaire' })),
         }
       }).filter(Boolean) as Tache[]
-
-      return {
-        id: existingPhase?.id || genId(),
-        typePhase: type,
-        pourcentageBudget: pct,
-        statut: existingPhase?.statut || 'AFaire',
-        taches,
-      }
+      return { id: existingPhase?.id || genId(), typePhase: type, pourcentageBudget: pct, statut: existingPhase?.statut || 'AFaire', taches }
     })
 
     setPhases(newPhases)
     setExpandedPhases(newPhases.map(p => p.id))
     setActiveTab('phases')
-
     const totalTaches = newPhases.reduce((acc, p) => acc + p.taches.length, 0)
     const phasesAvecTaches = newPhases.filter(p => p.taches.length > 0).length
-    alert(`✅ Planning appliqué !\n\n📋 ${phasesAvecTaches}/5 phases renseignées\n📝 ${totalTaches} tâches créées\n⭐ Chef de projet assigné comme testeur par défaut\n\nVous pouvez maintenant modifier les tâches dans l'onglet "Phases & Tâches".`)
+    alert(`✅ Planning appliqué !\n\n📋 ${phasesAvecTaches}/5 phases renseignées\n📝 ${totalTaches} tâches créées\n⭐ Chef de projet désigné testeur par défaut`)
   }
 
+  // ==================== STATS ====================
   const projectStats = useMemo(() => {
     if (!formData.dateDebut || !formData.dateFinPrevue) return null
     const start = new Date(formData.dateDebut), end = new Date(formData.dateFinPrevue)
     if (isNaN(start.getTime()) || isNaN(end.getTime())) return null
     let total = 0, workDays = 0, weekendDays = 0, feriesInPeriod = 0
-    const feriesList: JourFerie[] = []
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const cur = new Date(d); total++
       const isWE = cur.getDay() === 0 || cur.getDay() === 6
       const isFerie = isJourFerie(cur)
       if (isWE) weekendDays++
-      else if (isFerie) {
-        feriesInPeriod++
-        const f = joursFeries.find(jf => {
-          if (jf.recurrent) {
-            const mmdd = jf.date.slice(5)
-            const curMmdd = `${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`
-            return curMmdd === mmdd
-          }
-          return jf.date === cur.toISOString().split('T')[0]
-        })
-        if (f) feriesList.push(f)
-      } else workDays++
+      else if (isFerie) feriesInPeriod++
+      else workDays++
     }
-    return { total, workDays, weekendDays, feriesInPeriod, feriesList }
-  }, [formData.dateDebut, formData.dateFinPrevue, joursFeries, isJourFerie])
+    return { total, workDays, weekendDays, feriesInPeriod }
+  }, [formData.dateDebut, formData.dateFinPrevue, isJourFerie])
 
   const competenceStats = useMemo(() => {
     const allRequired = new Set<string>()
@@ -1204,31 +1210,20 @@ export function EditProjectView({
       skills.forEach(s => { if (allRequired.has(s)) covered.add(s) })
     })
     const missing = [...allRequired].filter(c => !covered.has(c))
-    return {
-      totalRequired: allRequired.size,
-      covered: covered.size,
-      missing,
-      coveragePct: allRequired.size === 0 ? 100 : Math.round((covered.size / allRequired.size) * 100),
-    }
+    return { totalRequired: allRequired.size, covered: covered.size, missing, coveragePct: allRequired.size === 0 ? 100 : Math.round((covered.size / allRequired.size) * 100) }
   }, [phases, teamMembers, employeCompetences])
 
-  // Fonction pour réassigner tous les testeurs au chef de projet
   const reassignAllTestersToChef = () => {
     if (!chefProjet) return
-    if (window.confirm(`Réassigner tous les testeurs à ${chefProjet.nomComplet} ?`)) {
-      setPhases(prev => prev.map(p => ({
-        ...p,
-        taches: p.taches.map(t => ({ ...t, testeurId: chefProjet.id }))
-      })))
+    if (window.confirm(`Désigner ${chefProjet.nomComplet} comme testeur sur toutes les tâches ?`)) {
+      setPhases(prev => prev.map(p => ({ ...p, taches: p.taches.map(t => ({ ...t, testeurId: chefProjet.id })) })))
     }
   }
 
   // ==================== MODALS ====================
-
   const MemberCompetenceModal = () => {
     if (!showMemberCompetenceModal || !selectedMemberForCompetence) return null
     const memberSkills = employeCompetences.get(selectedMemberForCompetence.id) || []
-
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
         <Card className="max-w-2xl w-full bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
@@ -1238,54 +1233,41 @@ export function EditProjectView({
               <p className="text-xs text-gray-500 mt-0.5">Gérez les compétences de ce membre</p>
             </div>
             <button onClick={() => { setShowMemberCompetenceModal(false); setSelectedMemberForCompetence(null) }}
-              className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400">
-              <X className="h-4 w-4" />
-            </button>
+              className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400"><X className="h-4 w-4" /></button>
           </div>
-
           <div className="overflow-y-auto flex-1 p-5 space-y-5">
             <div>
               <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-3">Compétences actuelles</p>
               <div className="flex flex-wrap gap-2">
+                {memberSkills.length === 0 && <p className="text-xs text-gray-500">Aucune compétence assignée</p>}
                 {memberSkills.map(skill => {
                   const comp = competences.find(c => c.nom === skill)
                   return (
                     <div key={skill} className="flex items-center gap-1 bg-gray-100 rounded-full px-3 py-1.5">
                       <span className={`text-xs ${comp ? NIVEAU_COLOR[comp.niveau] : 'text-gray-600'}`}>{skill}</span>
-                      <button
-                        onClick={() => handleRemoveCompetenceFromMember(selectedMemberForCompetence.id, skill)}
-                        className="ml-1 text-gray-400 hover:text-red-600"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
+                      <button onClick={() => handleRemoveCompetenceFromMember(selectedMemberForCompetence.id, skill)}
+                        className="ml-1 text-gray-400 hover:text-red-600"><X className="h-3 w-3" /></button>
                     </div>
                   )
                 })}
-                {memberSkills.length === 0 && <p className="text-xs text-gray-500">Aucune compétence assignée</p>}
               </div>
             </div>
-
             <div>
               <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-3">Ajouter une compétence</p>
               <div className="flex flex-wrap gap-2">
                 {competences.filter(c => !memberSkills.includes(c.nom)).map(comp => (
-                  <button
-                    key={comp.id}
-                    onClick={() => handleAssignCompetenceToMember(selectedMemberForCompetence.id, parseInt(comp.id))}
-                    className="text-xs px-3 py-1.5 rounded-full border border-gray-200 bg-white text-gray-600 hover:border-[#ef7c21] hover:text-[#ef7c21] transition-all"
-                  >
+                  <button key={comp.id} onClick={() => handleAssignCompetenceToMember(selectedMemberForCompetence.id, parseInt(comp.id))}
+                    className="text-xs px-3 py-1.5 rounded-full border border-gray-200 bg-white text-gray-600 hover:border-[#ef7c21] hover:text-[#ef7c21] transition-all">
                     + {comp.nom}
                   </button>
                 ))}
+                {competences.filter(c => !memberSkills.includes(c.nom)).length === 0 && <p className="text-xs text-gray-500">Toutes les compétences sont déjà assignées</p>}
               </div>
             </div>
           </div>
-
           <div className="p-4 border-t border-gray-100">
             <Button type="button" className="w-full bg-[#ef7c21] hover:bg-[#d95f0c] text-white"
-              onClick={() => { setShowMemberCompetenceModal(false); setSelectedMemberForCompetence(null) }}>
-              Fermer
-            </Button>
+              onClick={() => { setShowMemberCompetenceModal(false); setSelectedMemberForCompetence(null) }}>Fermer</Button>
           </div>
         </Card>
       </div>
@@ -1298,7 +1280,6 @@ export function EditProjectView({
     if (!task) return null
     const required = task.competencesRequises || []
     const sortedMembers = getMembersSortedBySkillMatch(task)
-
     return (
       <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
         <Card className="max-w-2xl w-full bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
@@ -1308,32 +1289,21 @@ export function EditProjectView({
               <p className="text-xs text-gray-500 mt-0.5">Tâche : <span className="font-medium">{task.titre}</span></p>
             </div>
             <button onClick={() => { setCompModalTaskId(null); setCompModalPhaseId(null) }}
-              className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400">
-              <X className="h-4 w-4" />
-            </button>
+              className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400"><X className="h-4 w-4" /></button>
           </div>
-
           <div className="overflow-y-auto flex-1 p-5 space-y-5">
             <div>
               <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-3">Sélectionner les compétences requises</p>
               <div className="space-y-4">
-                {Object.entries(competences.reduce((acc, c) => {
-                  if (!acc[c.categorie]) acc[c.categorie] = []
-                  acc[c.categorie].push(c)
-                  return acc
-                }, {} as Record<string, Competence[]>)).map(([cat, comps]) => (
+                {Object.entries(competences.reduce((acc, c) => { if (!acc[c.categorie]) acc[c.categorie] = []; acc[c.categorie].push(c); return acc }, {} as Record<string, Competence[]>)).map(([cat, comps]) => (
                   <div key={cat}>
                     <p className="text-xs font-medium text-gray-500 mb-2">{cat}</p>
                     <div className="flex flex-wrap gap-2">
                       {comps.map(comp => {
                         const isSelected = required.includes(comp.nom)
                         return (
-                          <button key={comp.id} type="button"
-                            onClick={() => toggleTaskCompetence(compModalPhaseId, compModalTaskId, comp.nom)}
-                            className={`text-xs px-3 py-1.5 rounded-full border transition-all font-medium ${isSelected
-                              ? 'bg-[#ef7c21] text-white border-[#ef7c21]'
-                              : 'bg-white text-gray-600 border-gray-200 hover:border-[#ef7c21] hover:text-[#ef7c21]'
-                            }`}>
+                          <button key={comp.id} type="button" onClick={() => toggleTaskCompetence(compModalPhaseId!, compModalTaskId!, comp.nom)}
+                            className={`text-xs px-3 py-1.5 rounded-full border transition-all font-medium ${isSelected ? 'bg-[#ef7c21] text-white border-[#ef7c21]' : 'bg-white text-gray-600 border-gray-200 hover:border-[#ef7c21] hover:text-[#ef7c21]'}`}>
                             {isSelected && <CheckCircle className="h-3 w-3 inline mr-1" />}
                             {comp.nom}
                             <span className={`ml-1 text-[10px] ${isSelected ? 'opacity-80' : 'opacity-50'}`}>{comp.niveau[0]}</span>
@@ -1345,10 +1315,9 @@ export function EditProjectView({
                 ))}
               </div>
             </div>
-
             {required.length > 0 && teamMembers.length > 0 && (
               <div>
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-3">Compatibilité membres de l'équipe</p>
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-3">Compatibilité membres</p>
                 <div className="space-y-2">
                   {sortedMembers.map(m => (
                     <div key={m.id} className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 border border-gray-200">
@@ -1374,7 +1343,6 @@ export function EditProjectView({
               </div>
             )}
           </div>
-
           <div className="p-4 border-t border-gray-100">
             <Button type="button" className="w-full bg-[#ef7c21] hover:bg-[#d95f0c] text-white"
               onClick={() => { setCompModalTaskId(null); setCompModalPhaseId(null) }}>
@@ -1387,7 +1355,6 @@ export function EditProjectView({
   }
 
   // ==================== RENDU ====================
-
   if (initialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -1409,9 +1376,12 @@ export function EditProjectView({
     )
   }
 
+  const selectedTypeIcon = getProjectTypeIcon(formData.typeProjet)
+  const TypeIcon = selectedTypeIcon.icon
+
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-8">
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button onClick={onBack} className="p-2 rounded-xl hover:bg-gray-100 text-gray-600 transition-colors">
@@ -1426,156 +1396,281 @@ export function EditProjectView({
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
+          <Button type="button" variant="outline"
             className="border-purple-400 text-purple-600 hover:bg-purple-50 hover:border-purple-500 flex items-center gap-2"
-            onClick={() => setShowAIModal(true)}
-          >
-            <Sparkles className="h-4 w-4" />
-            Générer avec IA
+            onClick={() => setShowAIModal(true)}>
+            <Sparkles className="h-4 w-4" /> Générer avec IA
           </Button>
-
-          {onDelete && (
-            <Button
-              variant="outline"
-              className="text-red-600 border-red-200 hover:bg-red-50"
-              onClick={() => { if (window.confirm('Supprimer ce projet ?')) onDelete(project.id) }}
-            >
-              <Trash2 className="h-4 w-4 mr-2" /> Supprimer
-            </Button>
-          )}
         </div>
       </div>
 
-      {/* Banner période + couverture compétences + chef projet */}
-      <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-        {projectStats && projectStats.workDays > 0 && (
-          <div className="bg-gradient-to-r from-blue-50 to-white rounded-xl p-4 border border-blue-200">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">
-                <Calendar className="h-5 w-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-gray-700">Période du projet</p>
-                <p className="text-xs text-gray-500">{formatDate(formData.dateDebut)} → {formatDate(formData.dateFinPrevue)}</p>
-              </div>
-            </div>
-            <div className="flex gap-4 text-center">
-              {[
-                { label: 'Total', value: projectStats.total, color: 'text-gray-800' },
-                { label: 'Ouvrés', value: projectStats.workDays, color: 'text-green-600' },
-                { label: 'WE', value: projectStats.weekendDays, color: 'text-gray-500' },
-                { label: 'Fériés', value: projectStats.feriesInPeriod, color: 'text-orange-600' },
-              ].map(({ label, value, color }) => (
-                <div key={label} className="flex-1">
-                  <p className={`text-xl font-bold ${color}`}>{value}</p>
-                  <p className="text-xs text-gray-500">{label}</p>
-                </div>
-              ))}
+      {/* ── Banner période ── */}
+      {projectStats && projectStats.workDays > 0 && (
+        <div className="bg-gradient-to-r from-blue-50 to-white rounded-xl p-4 border border-blue-200">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center"><Calendar className="h-5 w-5 text-blue-600" /></div>
+            <div>
+              <p className="text-sm font-medium text-gray-700">Période du projet</p>
+              <p className="text-xs text-gray-500">{formatDate(formData.dateDebut)} → {formatDate(formData.dateFinPrevue)}</p>
             </div>
           </div>
-        )}
+          <div className="flex gap-4 text-center">
+            {[{ l: 'Total', v: projectStats.total, c: 'text-gray-800' }, { l: 'Ouvrés', v: projectStats.workDays, c: 'text-green-600' }, { l: 'WE', v: projectStats.weekendDays, c: 'text-gray-500' }, { l: 'Fériés', v: projectStats.feriesInPeriod, c: 'text-orange-600' }].map(({ l, v, c }) => (
+              <div key={l as string} className="flex-1"><p className={`text-xl font-bold ${c}`}>{v}</p><p className="text-xs text-gray-500">{l}</p></div>
+            ))}
+          </div>
+        </div>
+      )}
 
-       
-      </div>
-
-      {/* Tabs */}
+      {/* ── Tabs ── */}
       <div className="border-b border-gray-200">
         <nav className="flex gap-6 overflow-x-auto">
           {([
-            { id: 'details', label: 'Détails', icon: null },
-            { id: 'team', label: 'Équipe', icon: null },
-            { id: 'phases', label: 'Phases & Tâches', icon: null },
-            { id: 'competences', label: 'Compétences', icon: <Zap className="h-3.5 w-3.5" />, badge: competences.length },
-            { id: 'feries', label: 'Jours fériés', icon: <CalendarOff className="h-3.5 w-3.5" />, badge: joursFeries.length },
-          ] as const).map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)}
-              className={`pb-3 px-1 text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0 ${activeTab === tab.id
-                ? 'border-b-2 border-[#ef7c21] text-[#ef7c21]'
-                : 'border-b-2 border-transparent text-gray-500 hover:text-[#1d1d1b]'
-              }`}>
-              {tab.icon}
-              {tab.label}
-              {'badge' in tab && (
-                <span className="bg-[#ef7c21]/10 text-[#ef7c21] text-xs px-1.5 py-0.5 rounded-full font-bold">
-                  {tab.badge}
-                </span>
-              )}
+            { id: 'details' as const, label: 'Détails' },
+            { id: 'team' as const, label: 'Équipe' },
+            { id: 'phases' as const, label: 'Phases & Tâches' },
+            { id: 'competences' as const, label: 'Compétences', icon: <Zap className="h-3.5 w-3.5" />, badge: competences.length },
+            { id: 'feries' as const, label: 'Jours fériés', icon: <CalendarOff className="h-3.5 w-3.5" />, badge: joursFeries.length },
+          ]).map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              className={`pb-3 px-1 text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0 ${activeTab === tab.id ? 'border-b-2 border-[#ef7c21] text-[#ef7c21]' : 'border-b-2 border-transparent text-gray-500 hover:text-[#1d1d1b]'}`}>
+              {tab.icon}{tab.label}
+              {'badge' in tab && <span className="bg-[#ef7c21]/10 text-[#ef7c21] text-xs px-1.5 py-0.5 rounded-full font-bold">{tab.badge}</span>}
             </button>
           ))}
         </nav>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* ==================== DETAILS ==================== */}
+
+        {/* ═══════════ ONGLET DÉTAILS ═══════════ */}
         {activeTab === 'details' && (
-          <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="bg-gradient-to-r from-gray-50 to-white px-6 py-4 border-b border-gray-100">
-              <h3 className="text-lg font-semibold">INFORMATIONS GÉNÉRALES</h3>
-            </div>
-            <div className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Nom du projet</label>
-                  <input type="text" required value={formData.nom} onChange={e => setFormData({ ...formData, nom: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Description</label>
-                  <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Type de projet</label>
-                  <select value={formData.typeProjet} onChange={e => setFormData({ ...formData, typeProjet: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white">
-                    {PROJECT_TYPES.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Statut</label>
-                  <select value={formData.statut} onChange={e => setFormData({ ...formData, statut: e.target.value as ProjectStatut })} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white">
-                    {(['Planifié', 'En cours', 'Terminé', 'Annulé'] as ProjectStatut[]).map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Lieu</label>
-                  <div className="relative">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <input type="text" value={formData.lieu} onChange={e => setFormData({ ...formData, lieu: e.target.value })} className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+          <>
+            <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+              <div className="bg-gradient-to-r from-gray-50 to-white px-6 py-4 border-b border-gray-100">
+                <h3 className="text-lg font-semibold">INFORMATIONS GÉNÉRALES</h3>
+              </div>
+              <div className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Nom du projet</label>
+                    <input type="text" required value={formData.nom} onChange={e => setFormData({ ...formData, nom: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Description</label>
+                    <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Type de projet</label>
+                    <div className="relative">
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2">
+                        <TypeIcon className="h-4 w-4 text-[#ef7c21]" />
+                      </div>
+                      <select 
+                        value={formData.typeProjet} 
+                        onChange={e => setFormData({ ...formData, typeProjet: e.target.value })}
+                        className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white"
+                        disabled={loadingTypes}
+                      >
+                        {loadingTypes ? (
+                          <option>Chargement des types...</option>
+                        ) : (
+                          projectTypes.map(type => (
+                            <option key={type.id} value={type.value}>
+                              {type.label}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Statut</label>
+                    <select value={formData.statut} onChange={e => setFormData({ ...formData, statut: e.target.value as ProjectStatut })}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white">
+                      {(['Planifié', 'En cours', 'Terminé', 'Annulé'] as ProjectStatut[]).map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Lieu</label>
+                    <div className="relative">
+                      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <input type="text" value={formData.lieu} onChange={e => setFormData({ ...formData, lieu: e.target.value })}
+                        className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget estimé</label>
+                    <input type="number" value={formData.budgetEstime} min="0" step="1000" required
+                      onChange={e => setFormData({ ...formData, budgetEstime: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget réel</label>
+                    <input type="number" value={formData.budgetReel} min="0" step="1000" placeholder="Optionnel"
+                      onChange={e => setFormData({ ...formData, budgetReel: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Date de début</label>
+                    <input type="date" value={formData.dateDebut} required onChange={e => setFormData({ ...formData, dateDebut: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Date de fin prévue</label>
+                    <input type="date" value={formData.dateFinPrevue} required onChange={e => setFormData({ ...formData, dateFinPrevue: e.target.value })}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget estimé (DH)</label>
-                  <input type="number" value={formData.budgetEstime} min="0" step="1000" required onChange={e => setFormData({ ...formData, budgetEstime: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Date de début</label>
-                  <input type="date" value={formData.dateDebut} required onChange={e => setFormData({ ...formData, dateDebut: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Date de fin prévue</label>
-                  <input type="date" value={formData.dateFinPrevue} required onChange={e => setFormData({ ...formData, dateFinPrevue: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+              </div>
+            </Card>
+
+            {/* ── Cahier des charges ── */}
+            <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+              <div className="bg-gradient-to-r from-gray-50 to-white px-6 py-4 border-b border-gray-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <FileText className="h-5 w-5 text-[#ef7c21]" /> CAHIER DES CHARGES
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-1">Document utilisé par l'IA pour la génération du planning (PDF ou DOCX)</p>
+                  </div>
+                  {cdcExists && (
+                    <span className="text-xs px-3 py-1 bg-green-100 text-green-700 rounded-full font-medium flex items-center gap-1">
+                      <CheckCircle className="h-3 w-3" /> Fichier attaché
+                    </span>
+                  )}
                 </div>
               </div>
-            </div>
-          </Card>
+              <div className="p-6">
+                {cdcExists ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-green-50 border border-green-200 rounded-xl">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                          <FileText className="h-6 w-6 text-green-700" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-green-800">Cahier des charges attaché</p>
+                          <p className="text-xs text-green-600">Document disponible pour la génération IA</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={handleDownloadCdc} disabled={isDownloadingCdc}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-green-300 text-green-700 rounded-lg text-xs hover:bg-green-50 transition-all font-medium disabled:opacity-50">
+                          {isDownloadingCdc ? <><RefreshCw className="h-3 w-3 animate-spin" /> Téléchargement...</> : <><Download className="h-3 w-3" /> Télécharger</>}
+                        </button>
+                        <label className="cursor-pointer px-3 py-2 bg-white border border-gray-300 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-all font-medium inline-flex items-center gap-1.5">
+                          <Upload className="h-3 w-3" /> Remplacer
+                          <input type="file" accept=".pdf,.docx" className="hidden" onChange={(e) => setCdcFile(e.target.files?.[0] || null)} />
+                        </label>
+                        <button type="button" onClick={handleDeleteCdc} disabled={isDeletingCdc}
+                          className="px-3 py-2 bg-white border border-red-300 text-red-600 rounded-lg text-xs hover:bg-red-50 transition-all font-medium inline-flex items-center gap-1.5 disabled:opacity-50">
+                          {isDeletingCdc ? <><RefreshCw className="h-3 w-3 animate-spin" /> Suppression...</> : <><Trash2 className="h-3 w-3" /> Supprimer</>}
+                        </button>
+                      </div>
+                    </div>
+
+                    {cdcFile && (
+                      <div className="p-4 bg-orange-50 border border-orange-200 rounded-xl">
+                        <p className="text-sm font-medium text-orange-800 mb-3">Remplacer le fichier actuel par :</p>
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border flex-1">
+                            <FileText className="h-4 w-4 text-[#ef7c21]" />
+                            <span className="text-sm text-gray-700 truncate">{cdcFile.name}</span>
+                            <span className="text-xs text-gray-400">({(cdcFile.size / 1024 / 1024).toFixed(2)} Mo)</span>
+                          </div>
+                          <button type="button" onClick={() => setCdcFile(null)} className="p-2 text-gray-400 hover:text-red-600"><X className="h-4 w-4" /></button>
+                        </div>
+                        {isUploadingCdc && (
+                          <div className="mb-3">
+                            <div className="flex justify-between text-xs text-orange-700 mb-1">
+                              <span>Envoi en cours...</span><span>{cdcUploadProgress}%</span>
+                            </div>
+                            <div className="w-full h-2 bg-orange-200 rounded-full overflow-hidden">
+                              <div className="h-full bg-orange-600 rounded-full transition-all duration-300" style={{ width: `${cdcUploadProgress}%` }} />
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <button type="button" onClick={handleUploadCdc} disabled={isUploadingCdc}
+                            className="px-4 py-2 bg-orange-600 text-white rounded-lg text-xs hover:bg-orange-700 disabled:opacity-50 transition-all font-medium inline-flex items-center gap-1.5">
+                            {isUploadingCdc ? <><RefreshCw className="h-3 w-3 animate-spin" /> Envoi...</> : <><Save className="h-3 w-3" /> Confirmer le remplacement</>}
+                          </button>
+                          <button type="button" onClick={() => setCdcFile(null)} disabled={isUploadingCdc}
+                            className="px-4 py-2 bg-white border border-gray-300 text-gray-600 rounded-lg text-xs hover:bg-gray-50 transition-all font-medium disabled:opacity-50">Annuler</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {!cdcFile ? (
+                      <div className="text-center p-8 border-2 border-dashed border-gray-200 rounded-xl hover:border-[#ef7c21]/50 transition-colors">
+                        <FileText className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+                        <p className="text-sm text-gray-600 mb-1">Aucun cahier des charges n'est encore rattaché à ce projet.</p>
+                        <p className="text-xs text-gray-400 mb-4">Formats acceptés : PDF, DOCX</p>
+                        <label className="cursor-pointer inline-flex items-center gap-2 px-5 py-2.5 bg-[#ef7c21] text-white rounded-xl text-sm hover:bg-[#d95f0c] transition-all font-medium shadow-sm">
+                          <Upload className="h-4 w-4" /> Ajouter un fichier
+                          <input type="file" accept=".pdf,.docx" className="hidden" onChange={(e) => setCdcFile(e.target.files?.[0] || null)} />
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="p-4 bg-orange-50 border border-orange-200 rounded-xl">
+                        <p className="text-sm font-medium text-orange-800 mb-3">Fichier sélectionné :</p>
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border flex-1">
+                            <FileText className="h-4 w-4 text-[#ef7c21]" />
+                            <span className="text-sm text-gray-700 truncate">{cdcFile.name}</span>
+                            <span className="text-xs text-gray-400">({(cdcFile.size / 1024 / 1024).toFixed(2)} Mo)</span>
+                          </div>
+                          <button type="button" onClick={() => setCdcFile(null)} className="p-2 text-gray-400 hover:text-red-600"><X className="h-4 w-4" /></button>
+                        </div>
+                        {isUploadingCdc && (
+                          <div className="mb-3">
+                            <div className="flex justify-between text-xs text-orange-700 mb-1"><span>Envoi en cours...</span><span>{cdcUploadProgress}%</span></div>
+                            <div className="w-full h-2 bg-orange-200 rounded-full overflow-hidden">
+                              <div className="h-full bg-orange-600 rounded-full transition-all duration-300" style={{ width: `${cdcUploadProgress}%` }} />
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <button type="button" onClick={handleUploadCdc} disabled={isUploadingCdc}
+                            className="px-5 py-2.5 bg-green-600 text-white rounded-xl text-sm hover:bg-green-700 disabled:opacity-50 transition-all font-medium inline-flex items-center gap-2">
+                            {isUploadingCdc ? <><RefreshCw className="h-4 w-4 animate-spin" /> Envoi en cours...</> : <><Save className="h-4 w-4" /> Envoyer le fichier</>}
+                          </button>
+                          <button type="button" onClick={() => setCdcFile(null)} disabled={isUploadingCdc}
+                            className="px-4 py-2.5 bg-white border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50 transition-all font-medium disabled:opacity-50">Annuler</button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-700 flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                      <div><p className="font-medium">Pourquoi ajouter un cahier des charges ?</p><p className="text-yellow-600">L'IA l'utilisera pour générer un planning réaliste avec des tâches adaptées à votre projet.</p></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </>
         )}
 
-        {/* ==================== COMPÉTENCES ==================== */}
+        {/* ═══════════ ONGLET COMPÉTENCES ═══════════ */}
         {activeTab === 'competences' && (
           <div className="space-y-4">
             <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="bg-gradient-to-r from-gray-50 to-white px-6 py-4 border-b border-gray-100 flex justify-between items-center">
                 <div>
-                  <h3 className="text-lg font-semibold flex items-center gap-2">
-                    <Zap className="h-5 w-5 text-[#ef7c21]" /> RÉFÉRENTIEL DE COMPÉTENCES
-                  </h3>
+                  <h3 className="text-lg font-semibold flex items-center gap-2"><Zap className="h-5 w-5 text-[#ef7c21]" /> RÉFÉRENTIEL DE COMPÉTENCES</h3>
                   <p className="text-xs text-gray-500 mt-1">Définissez les compétences du projet, puis assignez-les aux tâches.</p>
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={() => setShowAddComp(!showAddComp)} className="text-xs border-[#ef7c21] text-[#ef7c21] hover:bg-[#ef7c21] hover:text-white">
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowAddComp(!showAddComp)}
+                  className="text-xs border-[#ef7c21] text-[#ef7c21] hover:bg-[#ef7c21] hover:text-white">
                   <Plus className="h-3 w-3 mr-1" /> Ajouter
                 </Button>
               </div>
-
               <div className="p-6 space-y-4">
                 {showAddComp && (
                   <div className="p-4 bg-orange-50 border border-orange-200 rounded-xl space-y-3">
@@ -1583,44 +1678,42 @@ export function EditProjectView({
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                       <div className="md:col-span-2">
                         <label className="block text-xs font-medium text-gray-600 mb-1 uppercase tracking-wider">Nom</label>
-                        <input type="text" placeholder="Ex: Vue.js, PostgreSQL…" value={newComp.nom} onChange={e => setNewComp({ ...newComp, nom: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                        <input type="text" placeholder="Ex: Vue.js, PostgreSQL…" value={newComp.nom} onChange={e => setNewComp({ ...newComp, nom: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1 uppercase tracking-wider">Catégorie</label>
-                        <select value={newComp.categorie} onChange={e => setNewComp({ ...newComp, categorie: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white">
+                        <select value={newComp.categorie} onChange={e => setNewComp({ ...newComp, categorie: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white">
                           {CATEGORIES_COMPETENCES.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1 uppercase tracking-wider">Niveau requis</label>
-                        <select value={newComp.niveau} onChange={e => setNewComp({ ...newComp, niveau: e.target.value as NiveauCompetence })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white">
+                        <select value={newComp.niveau} onChange={e => setNewComp({ ...newComp, niveau: e.target.value as NiveauCompetence })}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white">
                           {NIVEAUX.map(n => <option key={n} value={n}>{n}</option>)}
                         </select>
                       </div>
                     </div>
-
                     <div className="flex gap-2">
-                      <Button type="button" size="sm" className="bg-[#ef7c21] hover:bg-[#d95f0c] text-white" onClick={addCompetence}>
-                        <Plus className="h-3 w-3 mr-1" /> Ajouter
-                      </Button>
+                      <Button type="button" size="sm" className="bg-[#ef7c21] hover:bg-[#d95f0c] text-white" onClick={addCompetence}><Plus className="h-3 w-3 mr-1" /> Ajouter</Button>
                       <Button type="button" size="sm" variant="outline" onClick={() => { setShowAddComp(false); setNewComp({ nom: '', categorie: CATEGORIES_COMPETENCES[0], niveau: 'Intermédiaire', description: '' }) }}>Annuler</Button>
                     </div>
                   </div>
                 )}
-
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs text-gray-500 font-medium">Filtrer :</span>
                   {['all', ...CATEGORIES_COMPETENCES].map(cat => (
-                    <button key={cat} type="button" onClick={() => setFilterCategorie(cat)} className={`text-xs px-3 py-1 rounded-full border transition-all ${filterCategorie === cat ? 'bg-[#ef7c21] text-white border-[#ef7c21]' : 'bg-white text-gray-600 border-gray-200 hover:border-[#ef7c21]'}`}>
+                    <button key={cat} type="button" onClick={() => setFilterCategorie(cat)}
+                      className={`text-xs px-3 py-1 rounded-full border transition-all ${filterCategorie === cat ? 'bg-[#ef7c21] text-white border-[#ef7c21]' : 'bg-white text-gray-600 border-gray-200 hover:border-[#ef7c21]'}`}>
                       {cat === 'all' ? 'Toutes' : cat}
                     </button>
                   ))}
                 </div>
-
                 {Object.entries(competencesParCategorie).length === 0 ? (
                   <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
-                    <Zap className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-                    <p className="text-gray-500 text-sm">Aucune compétence configurée</p>
+                    <Zap className="h-12 w-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500 text-sm">Aucune compétence configurée</p>
                   </div>
                 ) : (
                   Object.entries(competencesParCategorie).map(([cat, comps]) => (
@@ -1641,11 +1734,9 @@ export function EditProjectView({
                                   <span className="flex items-center gap-0.5"><CheckCircle className="h-3 w-3" /> {usedInTasks} tâche(s)</span>
                                   <span className="flex items-center gap-0.5"><User className="h-3 w-3" /> {membersWithComp} membre(s)</span>
                                 </div>
-                                {comp.description && <p className="text-xs text-gray-400 truncate mt-0.5">{comp.description}</p>}
                               </div>
-                              <button type="button" onClick={() => removeCompetence(comp.id)} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-all shrink-0 ml-2">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
+                              <button type="button" onClick={() => removeCompetence(comp.id)}
+                                className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-all shrink-0 ml-2"><Trash2 className="h-3.5 w-3.5" /></button>
                             </div>
                           )
                         })}
@@ -1656,11 +1747,25 @@ export function EditProjectView({
               </div>
             </Card>
 
+            {competenceStats.totalRequired > 0 && (
+              <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><Award className="h-4 w-4 text-[#ef7c21]" /> Couverture des compétences</h4>
+                    <span className={`text-xs px-2 py-1 rounded-full font-bold ${competenceStats.coveragePct >= 80 ? 'bg-green-100 text-green-700' : competenceStats.coveragePct >= 50 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>{competenceStats.coveragePct}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden mb-3">
+                    <div className={`h-full rounded-full transition-all ${competenceStats.coveragePct >= 80 ? 'bg-green-500' : competenceStats.coveragePct >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${competenceStats.coveragePct}%` }} />
+                  </div>
+                  {competenceStats.missing.length > 0 && <div className="text-xs text-red-600"><span className="font-medium">Compétences non couvertes :</span> {competenceStats.missing.join(', ')}</div>}
+                </div>
+              </Card>
+            )}
+
             {teamMembers.length > 0 && competences.length > 0 && (
               <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                 <div className="bg-gradient-to-r from-gray-50 to-white px-6 py-4 border-b border-gray-100">
                   <h3 className="text-lg font-semibold flex items-center gap-2"><BarChart2 className="h-5 w-5 text-[#ef7c21]" /> MATRICE MEMBRES × COMPÉTENCES</h3>
-                  <p className="text-xs text-gray-500 mt-1">Basée sur les compétences assignées à chaque membre. ✅ = compétence présente.</p>
                 </div>
                 <div className="p-6 overflow-x-auto">
                   <table className="w-full text-xs border-collapse">
@@ -1677,121 +1782,89 @@ export function EditProjectView({
                     </thead>
                     <tbody>
                       {teamMembers.map((m, mi) => {
-                        const memberSkills = employeCompetences.get(m.id) || []
-                        const memberSkillsLower = memberSkills.map(s => s.toLowerCase())
-                        const matchCount = competences.filter(c => memberSkillsLower.includes(c.nom.toLowerCase())).length
-                        const isChef = chefProjet && m.id === chefProjet.id
+                        const ms = (employeCompetences.get(m.id) || []).map(s => s.toLowerCase())
+                        const mc = competences.filter(c => ms.includes(c.nom.toLowerCase())).length
+                        const ic = chefProjet && m.id === chefProjet.id
                         return (
-                          <tr key={m.id} className={`${mi % 2 === 0 ? 'bg-gray-50/50' : 'bg-white'} ${isChef ? 'bg-yellow-50/60' : ''}`}>
+                          <tr key={m.id} className={`${mi % 2 === 0 ? 'bg-gray-50/50' : 'bg-white'} ${ic ? 'bg-yellow-50/60' : ''}`}>
                             <td className="p-2 pr-4 font-medium text-gray-800 whitespace-nowrap border-b border-gray-100">
                               <div className="flex items-center gap-2">
-                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${isChef ? 'bg-yellow-100 text-yellow-700' : 'bg-[#ef7c21]/10 text-[#ef7c21]'}`}>
+                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${ic ? 'bg-yellow-100 text-yellow-700' : 'bg-[#ef7c21]/10 text-[#ef7c21]'}`}>
                                   {m.nomComplet.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
                                 </div>
                                 <span className="truncate max-w-[120px]">{m.nomComplet}</span>
-                                {isChef && <Star className="h-3 w-3 text-yellow-500 fill-yellow-500 shrink-0" />}
-                                <span className="text-gray-400 text-xs">({matchCount}/{Math.min(competences.length, 12)})</span>
+                                {ic && <Star className="h-3 w-3 text-yellow-500 fill-yellow-500 shrink-0" />}
+                                <span className="text-gray-400 text-xs">({mc}/{Math.min(competences.length, 12)})</span>
                               </div>
                             </td>
-                            {competences.slice(0, 12).map(c => {
-                              const has = memberSkillsLower.includes(c.nom.toLowerCase())
-                              return (
-                                <td key={c.id} className="p-2 text-center border-b border-gray-100">
-                                  {has ? <CheckCircle className="h-4 w-4 text-green-500 mx-auto" /> : <span className="text-gray-300 text-base">—</span>}
-                                </td>
-                              )
-                            })}
+                            {competences.slice(0, 12).map(c => (
+                              <td key={c.id} className="p-2 text-center border-b border-gray-100">
+                                {ms.includes(c.nom.toLowerCase()) ? <CheckCircle className="h-4 w-4 text-green-500 mx-auto" /> : <span className="text-gray-300 text-base">—</span>}
+                              </td>
+                            ))}
                           </tr>
                         )
                       })}
                     </tbody>
                   </table>
                 </div>
-              </Card>
+              </Card >
             )}
           </div>
         )}
 
-        {/* ==================== JOURS FÉRIÉS API ==================== */}
+        {/* ═══════════ ONGLET JOURS FÉRIÉS ═══════════ */}
         {activeTab === 'feries' && (
           <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="bg-gradient-to-r from-gray-50 to-white px-6 py-4 border-b border-gray-100">
               <div className="flex justify-between items-center">
                 <div>
-                  <h3 className="text-lg font-semibold flex items-center gap-2">
-                    <CalendarOff className="h-5 w-5 text-[#ef7c21]" />
-                    JOURS FÉRIÉS EN TUNISIE
-                  </h3>
+                  <h3 className="text-lg font-semibold flex items-center gap-2"><CalendarOff className="h-5 w-5 text-[#ef7c21]" /> JOURS FÉRIÉS EN TUNISIE</h3>
                   <p className="text-xs text-gray-500 mt-1">Données officielles • Source: Nager.Date</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <select
-                    value={holidayYear}
-                    onChange={(e) => {
-                      const year = parseInt(e.target.value)
-                      setHolidayYear(year)
-                      loadHolidaysFromAPI(year)
-                    }}
-                    className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]"
-                  >
-                    {[2023, 2024, 2025, 2026, 2027].map(year => (
-                      <option key={year} value={year}>{year}</option>
-                    ))}
+                  <select value={holidayYear} onChange={e => { setHolidayYear(parseInt(e.target.value)); loadHolidaysFromAPI(parseInt(e.target.value)) }}
+                    className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]">
+                    {[2023, 2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
-                  <button
-                    type="button"
-                    onClick={() => loadHolidaysFromAPI(holidayYear)}
-                    className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500"
-                    disabled={isLoadingHolidays}
-                  >
+                  <button type="button" onClick={() => loadHolidaysFromAPI(holidayYear)} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500" disabled={isLoadingHolidays}>
                     <RefreshCw className={`h-4 w-4 ${isLoadingHolidays ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
               </div>
             </div>
-
             <div className="p-6">
               {isLoadingHolidays ? (
-                <div className="flex items-center justify-center py-12">
-                  <RefreshCw className="h-8 w-8 text-[#ef7c21] animate-spin" />
-                </div>
+                <div className="flex items-center justify-center py-12"><RefreshCw className="h-8 w-8 text-[#ef7c21] animate-spin" /></div>
               ) : holidayError ? (
                 <div className="text-center py-12 border-2 border-red-200 bg-red-50 rounded-xl">
-                  <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-3" />
-                  <p className="text-red-600 text-sm">{holidayError}</p>
+                  <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-3" /><p className="text-red-600 text-sm">{holidayError}</p>
                   <button type="button" onClick={() => loadHolidaysFromAPI(holidayYear)} className="mt-3 text-xs text-[#ef7c21] hover:underline">Réessayer</button>
                 </div>
               ) : joursFeriesSorted.length === 0 ? (
                 <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
-                  <CalendarOff className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-                  <p className="text-gray-500 text-sm">Aucun jour férié trouvé pour {holidayYear}</p>
+                  <CalendarOff className="h-12 w-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500 text-sm">Aucun jour férié trouvé pour {holidayYear}</p>
                 </div>
               ) : (
                 <div className="space-y-4">
                   {Object.entries(holidaysByMonth).map(([month, holidays]) => (
                     <div key={month}>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-3 capitalize flex items-center gap-2">
-                        <span className="w-1 h-4 rounded-full bg-[#ef7c21]"></span>
-                        {month}
-                      </h4>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3 capitalize flex items-center gap-2"><span className="w-1 h-4 rounded-full bg-[#ef7c21]" />{month}</h4>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                         {holidays.map(jf => {
-                          const dateObj = new Date(jf.date)
-                          const dayName = dateObj.toLocaleDateString('fr-FR', { weekday: 'long' })
+                          const d = new Date(jf.date)
                           return (
                             <div key={jf.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-200 hover:border-[#ef7c21]/30 transition-all">
                               <div className="w-12 h-12 rounded-lg bg-[#ef7c21]/10 flex flex-col items-center justify-center shrink-0">
-                                <span className="text-lg font-bold text-[#ef7c21]">{String(dateObj.getDate()).padStart(2, '0')}</span>
-                                <span className="text-[10px] text-[#ef7c21]/70 uppercase">{dateObj.toLocaleDateString('fr-FR', { month: 'short' })}</span>
+                                <span className="text-lg font-bold text-[#ef7c21]">{String(d.getDate()).padStart(2, '0')}</span>
+                                <span className="text-[10px] text-[#ef7c21]/70 uppercase">{d.toLocaleDateString('fr-FR', { month: 'short' })}</span>
                               </div>
                               <div className="flex-1">
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <span className="text-sm font-medium text-gray-800">{jf.nom}</span>
-                                  {jf.recurrent && (
-                                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">🔁 Récurrent</span>
-                                  )}
+                                  {jf.recurrent && <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">🔁 Récurrent</span>}
                                 </div>
-                                <p className="text-xs text-gray-500 capitalize">{dayName}</p>
+                                <p className="text-xs text-gray-500 capitalize">{d.toLocaleDateString('fr-FR', { weekday: 'long' })}</p>
                               </div>
                             </div>
                           )
@@ -1801,16 +1874,15 @@ export function EditProjectView({
                   ))}
                 </div>
               )}
-
               <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 flex items-start gap-2">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                 <div>
                   <p className="font-medium mb-1">📌 Comment les jours fériés sont pris en compte :</p>
                   <ul className="list-disc list-inside space-y-0.5 text-blue-600">
-                    <li>Exclus automatiquement du calcul de charge (limite de {MAX_HOURS_PER_DAY}h/jour)</li>
-                    <li>Les week-ends sont également exclus du calcul</li>
-                    <li>Les jours récurrents (🔁) s'appliquent chaque année</li>
-                    <li>Les données sont mises à jour depuis l'API officielle des jours fériés</li>
+                    <li>Exclus du calcul de charge Responsable (limite {MAX_HOURS_PER_DAY}h/jour)</li>
+                    <li>Les week-ends sont également exclus</li>
+                    <li>Les jours récurrents s'appliquent chaque année</li>
+                    <li>Le rôle Testeur n'est pas affecté par ces exclusions</li>
                   </ul>
                 </div>
               </div>
@@ -1818,28 +1890,24 @@ export function EditProjectView({
           </Card>
         )}
 
-        {/* ==================== ÉQUIPE ==================== */}
+        {/* ═══════════ ONGLET ÉQUIPE ═══════════ */}
         {activeTab === 'team' && (
           <Card className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="bg-gradient-to-r from-gray-50 to-white px-6 py-4 border-b border-gray-100 flex justify-between items-center">
               <div>
                 <h3 className="text-lg font-semibold">COMPOSITION DE L'ÉQUIPE</h3>
                 <p className="text-xs text-gray-500 mt-1">{teamMembers.length} membre(s)</p>
-                {chefProjet ? (
-                  <div className="flex items-center gap-1.5 mt-1 text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded-full border border-yellow-200 w-fit">
-                    <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
-                    <span>Chef de projet : <strong>{chefProjet.nomComplet}</strong> — Testeur par défaut (modifiable)</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 mt-1 text-xs text-orange-700 bg-orange-50 px-2 py-1 rounded-full border border-orange-200 w-fit">
-                    <AlertCircle className="h-3 w-3" />
-                    <span>Aucun chef de projet détecté — ajoutez un membre avec rôle "Chef" ou "Lead"</span>
-                  </div>
-                )}
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setShowTeamSelector(!showTeamSelector)} className="text-xs border-[#ef7c21] text-[#ef7c21] hover:bg-[#ef7c21] hover:text-white" disabled={addingMembers}>
-                {addingMembers ? <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> : <UserPlus className="h-3 w-3 mr-1" />} Ajouter un membre
-              </Button>
+              <div className="flex items-center gap-2">
+                {chefProjet && (
+                  <Button type="button" variant="outline" size="sm" onClick={reassignAllTestersToChef}
+                    className="text-xs border-yellow-400 text-yellow-600 hover:bg-yellow-50"><Star className="h-3 w-3 mr-1" /> Testeur → Chef</Button>
+                )}
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowTeamSelector(!showTeamSelector)}
+                  className="text-xs border-[#ef7c21] text-[#ef7c21] hover:bg-[#ef7c21] hover:text-white" disabled={addingMembers}>
+                  {addingMembers ? <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> : <UserPlus className="h-3 w-3 mr-1" />} Ajouter
+                </Button>
+              </div>
             </div>
             <div className="p-6">
               {teamMembers.length > 0 ? (
@@ -1876,15 +1944,10 @@ export function EditProjectView({
                           </div>
                         </div>
                         <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => { setSelectedMemberForCompetence(member); setShowMemberCompetenceModal(true) }}
-                            className="p-2 hover:bg-purple-50 rounded-lg text-gray-400 hover:text-purple-600 transition-all opacity-0 group-hover:opacity-100"
-                            title="Gérer les compétences"
-                          >
-                            <Zap className="h-4 w-4" />
-                          </button>
-                          <button type="button" onClick={() => removeTeamMember(member.id)} disabled={isRemoving} className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-50">
+                          <button type="button" onClick={() => { setSelectedMemberForCompetence(member); setShowMemberCompetenceModal(true) }}
+                            className="p-2 hover:bg-purple-50 rounded-lg text-gray-400 hover:text-purple-600 transition-all opacity-0 group-hover:opacity-100" title="Gérer les compétences"><Zap className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => removeTeamMember(member.id)} disabled={isRemoving}
+                            className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-50">
                             {isRemoving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UserMinus className="h-4 w-4" />}
                           </button>
                         </div>
@@ -1901,6 +1964,7 @@ export function EditProjectView({
                   </Button>
                 </div>
               )}
+
               {showTeamSelector && (
                 <div className="mt-6 border border-gray-200 rounded-xl overflow-hidden shadow-lg">
                   <div className="p-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
@@ -1910,17 +1974,14 @@ export function EditProjectView({
                     </div>
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                      <input type="text" placeholder="Rechercher…" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
+                      <input type="text" placeholder="Rechercher…" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
                     </div>
                   </div>
                   <div className="max-h-96 overflow-y-auto divide-y divide-gray-100">
-                    {loadingMembers ? (
-                      <div className="flex items-center justify-center py-12"><RefreshCw className="h-6 w-6 text-[#ef7c21] animate-spin" /></div>
-                    ) : availableMembersFiltered.length > 0 ? (
+                    {availableMembersFiltered.length > 0 ? (
                       availableMembersFiltered.map(emp => {
                         const isExpectedChef = chefEquipeId && emp.id === chefEquipeId
-                        const wouldBeChefByRole = emp.role?.toLowerCase().includes('chef') || emp.role?.toLowerCase().includes('lead') || emp.role?.toLowerCase().includes('manager') || emp.role?.toLowerCase().includes('directeur') || emp.role?.toLowerCase().includes('scrum master')
-                        const isHighlighted = isExpectedChef || wouldBeChefByRole
                         return (
                           <div key={emp.id} onClick={() => addTeamMember(emp)} className={`flex items-start gap-4 p-4 cursor-pointer group ${isExpectedChef ? 'bg-yellow-50' : 'hover:bg-gray-50'}`}>
                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-semibold text-sm shrink-0 ${isExpectedChef ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600 group-hover:bg-[#ef7c21]/10 group-hover:text-[#ef7c21]'}`}>
@@ -1929,23 +1990,12 @@ export function EditProjectView({
                             <div className="flex-1">
                               <div className="flex items-center gap-2">
                                 <span className="text-sm font-medium">{emp.nomComplet}</span>
-                                <span className={`text-xs px-2 py-0.5 rounded-full ${isHighlighted ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100'}`}>{emp.role}</span>
-                                {isExpectedChef && (
-                                  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full flex items-center gap-1">
-                                    <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
-                                    ChefEquipeId — Testeur par défaut
-                                  </span>
-                                )}
-                                {!isExpectedChef && wouldBeChefByRole && (
-                                  <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full">⭐ Deviendra testeur par défaut</span>
-                                )}
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${isExpectedChef ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100'}`}>{emp.role}</span>
+                                {isExpectedChef && <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full flex items-center gap-1"><Star className="h-3 w-3 text-yellow-500 fill-yellow-500" /> Chef</span>}
                               </div>
                               {emp.specialites && emp.specialites.length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-1">
-                                  {emp.specialites.slice(0, 3).map((s, i) => {
-                                    const inRef = competences.some(c => c.nom.toLowerCase() === s.toLowerCase())
-                                    return <span key={i} className={`text-xs px-1.5 py-0.5 rounded-full ${inRef ? 'bg-[#ef7c21]/10 text-[#ef7c21]' : 'bg-gray-100 text-gray-500'}`}>{s}</span>
-                                  })}
+                                  {emp.specialites.slice(0, 3).map((s, i) => <span key={i} className={`text-xs px-1.5 py-0.5 rounded-full ${competences.some(c => c.nom.toLowerCase() === s.toLowerCase()) ? 'bg-[#ef7c21]/10 text-[#ef7c21]' : 'bg-gray-100 text-gray-500'}`}>{s}</span>)}
                                 </div>
                               )}
                             </div>
@@ -1954,10 +2004,7 @@ export function EditProjectView({
                         )
                       })
                     ) : (
-                      <div className="text-center py-12">
-                        <Search className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-                        <p className="text-gray-500">{searchTerm ? 'Aucun résultat' : 'Aucun membre disponible'}</p>
-                      </div>
+                      <div className="text-center py-12"><Search className="h-12 w-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500">{searchTerm ? 'Aucun résultat' : 'Aucun membre disponible'}</p></div>
                     )}
                   </div>
                 </div>
@@ -1966,7 +2013,7 @@ export function EditProjectView({
           </Card>
         )}
 
-        {/* ==================== PHASES ==================== */}
+        {/* ═══════════ ONGLET PHASES & TÂCHES ═══════════ */}
         {activeTab === 'phases' && (
           <div className="space-y-4">
             {phases.map((phase, phaseIdx) => (
@@ -1986,8 +2033,7 @@ export function EditProjectView({
                   <div className="p-6 space-y-4">
                     {phase.taches.map(task => {
                       const respConflict = task.responsableId ? getAssignmentConflict(task.responsableId, task, task.id) : { hasConflict: false, conflictingDates: [], message: '' }
-                      const testConflict = task.testeurId ? getAssignmentConflict(task.testeurId, task, task.id) : { hasConflict: false, conflictingDates: [], message: '' }
-                      const hasAnyConflict = respConflict.hasConflict || testConflict.hasConflict
+                      const hasRespConflict = respConflict.hasConflict
                       const remainingHours = getRemainingTaskHours(task)
                       const validatedCount = getValidatedSubTasksCount(task)
                       const isFullyValidated = isTaskFullyValidated(task)
@@ -2000,11 +2046,12 @@ export function EditProjectView({
                       const bestMatch = sortedForTask[0]
 
                       return (
-                        <div key={task.id} className={`border rounded-xl overflow-hidden transition-all ${hasAnyConflict ? 'border-red-300 bg-red-50/30' : hasNoSubTasks ? 'border-yellow-300 bg-yellow-50/30' : isFullyValidated ? 'border-green-200 bg-green-50/20' : 'border-gray-100'}`}>
+                        <div key={task.id} className={`border rounded-xl overflow-hidden transition-all ${hasRespConflict ? 'border-red-300 bg-red-50/30' : hasNoSubTasks ? 'border-yellow-300 bg-yellow-50/30' : isFullyValidated ? 'border-green-200 bg-green-50/20' : 'border-gray-100'}`}>
                           <div className="p-4 bg-gray-50/50 cursor-pointer" onClick={() => toggleTask(task.id)}>
                             <div className="flex items-center justify-between mb-3">
                               <div className="flex-1">
-                                <input type="text" value={task.titre} onChange={e => updateTask(phase.id, task.id, 'titre', e.target.value)} onClick={e => e.stopPropagation()} className="w-full px-2 py-1 border border-transparent hover:border-gray-300 rounded-lg bg-transparent font-medium focus:outline-none focus:border-[#ef7c21]" placeholder="Titre de la tâche" />
+                                <input type="text" value={task.titre} onChange={e => updateTask(phase.id, task.id, 'titre', e.target.value)} onClick={e => e.stopPropagation()}
+                                  className="w-full px-2 py-1 border border-transparent hover:border-gray-300 rounded-lg bg-transparent font-medium focus:outline-none focus:border-[#ef7c21]" placeholder="Titre de la tâche" />
                               </div>
                               <div className="flex items-center gap-2">
                                 <div className="flex items-center gap-1.5 mr-2 flex-wrap">
@@ -2013,10 +2060,11 @@ export function EditProjectView({
                                   {remainingHours > 0 && task.sousTaches.length > 0 && <span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">{remainingHours}h restantes</span>}
                                   {task.sousTaches.length > 0 && <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">{validatedCount}/{task.sousTaches.length} validées</span>}
                                   {workDaysInTask > 0 && <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">📅 {workDaysInTask}j ouvrés</span>}
-                                  {dailyContribution > 0 && <span className={`text-xs px-2 py-0.5 rounded-full ${dailyContribution <= MAX_HOURS_PER_DAY ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{dailyContribution.toFixed(1)}h/jour</span>}
+                                  {dailyContribution > 0 && <span className={`text-xs px-2 py-0.5 rounded-full ${dailyContribution <= MAX_HOURS_PER_DAY ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{dailyContribution.toFixed(1)}h/j</span>}
                                   {feriesInTask.length > 0 && <span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">🎌 {feriesInTask.length} férié(s)</span>}
-                                  <button type="button" onClick={e => { e.stopPropagation(); setCompModalPhaseId(phase.id); setCompModalTaskId(task.id) }} className={`text-xs px-2 py-0.5 rounded-full flex items-center gap-1 transition-all hover:ring-2 hover:ring-[#ef7c21] ${required.length > 0 ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500 border border-dashed border-gray-300'}`}>
-                                    <Zap className="h-3 w-3" /> {required.length > 0 ? `${required.length} compétence(s)` : 'Ajouter compétences'}
+                                  <button type="button" onClick={e => { e.stopPropagation(); setCompModalPhaseId(phase.id); setCompModalTaskId(task.id) }}
+                                    className={`text-xs px-2 py-0.5 rounded-full flex items-center gap-1 transition-all hover:ring-2 hover:ring-[#ef7c21] ${required.length > 0 ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500 border border-dashed border-gray-300'}`}>
+                                    <Zap className="h-3 w-3" /> {required.length > 0 ? `${required.length} comp.` : '+ Comp.'}
                                   </button>
                                 </div>
                                 <button type="button" onClick={e => { e.stopPropagation(); deleteTask(phase.id, task.id) }} className="p-1 hover:bg-white rounded-lg text-gray-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
@@ -2026,158 +2074,82 @@ export function EditProjectView({
 
                             {required.length > 0 && (
                               <div className="flex flex-wrap gap-1 mb-3">
-                                {required.map(r => {
-                                  const comp = competences.find(c => c.nom === r)
-                                  return <span key={r} className={`text-xs px-2 py-0.5 rounded-full ${comp ? NIVEAU_COLOR[comp.niveau] : 'bg-gray-100 text-gray-600'}`}>{r}</span>
-                                })}
+                                {required.map(r => { const comp = competences.find(c => c.nom === r); return <span key={r} className={`text-xs px-2 py-0.5 rounded-full ${comp ? NIVEAU_COLOR[comp.niveau] : 'bg-gray-100 text-gray-600'}`}>{r}</span> })}
                               </div>
                             )}
 
                             {required.length > 0 && !task.responsableId && bestMatch && bestMatch.matchPct > 0 && (
                               <div className="mb-3 p-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 flex items-center gap-2">
                                 <Star className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                                <span>Meilleur candidat : <strong>{bestMatch.nomComplet}</strong> ({bestMatch.matchPct}% de correspondance)</span>
+                                <span>Meilleur candidat : <strong>{bestMatch.nomComplet}</strong> ({bestMatch.matchPct}% correspondance)</span>
                               </div>
                             )}
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
                               <div className="flex items-center gap-2">
                                 <User className="h-4 w-4 text-[#ef7c21] shrink-0" />
-                                <select value={task.responsableId || ''} onClick={e => e.stopPropagation()} onChange={e => {
-                                  e.stopPropagation()
-                                  const selectedId = e.target.value ? parseInt(e.target.value) : undefined
-                                  if (selectedId) {
-                                    const hyp: Tache = { ...task, responsableId: selectedId }
-                                    const c = getAssignmentConflict(selectedId, hyp, task.id)
-                                    if (c.hasConflict) {
-                                      alert(`⛔ "${getMemberName(selectedId)}" dépasserait ${MAX_HOURS_PER_DAY}h/jour\n\n${c.message}${c.suggestedAction ? '\n💡 ' + c.suggestedAction : ''}\n\n❌ Assignation refusée.`)
-                                      return
-                                    }
-                                  }
-                                  updateTask(phase.id, task.id, 'responsableId', selectedId)
-                                }} className={`flex-1 px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#ef7c21] ${respConflict.hasConflict ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+                                <select value={task.responsableId || ''} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); updateTask(phase.id, task.id, 'responsableId', e.target.value ? parseInt(e.target.value) : undefined) }}
+                                  className={`flex-1 px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#ef7c21] ${hasRespConflict ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
                                   <option value="">Choisir un responsable</option>
                                   {sortedForTask.map(m => {
                                     const hyp: Tache = { ...task, responsableId: m.id }
                                     const c = getAssignmentConflict(m.id, hyp, task.id)
                                     const matchLabel = required.length > 0 ? ` (${m.matchPct}%)` : ''
-                                    const isChefOption = chefProjet && m.id === chefProjet.id
-                                    return <option key={m.id} value={m.id} disabled={c.hasConflict}>{isChefOption ? '⭐ ' : ''}{m.nomComplet}{matchLabel}{c.hasConflict ? ` ⛔ dépasse ${MAX_HOURS_PER_DAY}h/j` : ''}</option>
+                                    return <option key={m.id} value={m.id} disabled={c.hasConflict}>{m.nomComplet}{matchLabel}{c.hasConflict ? ` ⛔ ${MAX_HOURS_PER_DAY}h/j` : ''}</option>
                                   })}
                                 </select>
+                                {hasRespConflict && <span className="text-xs text-red-500 whitespace-nowrap">⛔</span>}
                               </div>
-
-                              {/* ── TESTEUR : Select modifiable avec chef en valeur par défaut ── */}
                               <div className="flex items-center gap-2">
-                                <CheckCircle className="h-4 w-4 text-[#ef7c21] shrink-0" />
-                                <select 
-                                  value={task.testeurId || ''} 
-                                  onClick={e => e.stopPropagation()} 
-                                  onChange={e => {
-                                    e.stopPropagation()
-                                    const selectedId = e.target.value ? parseInt(e.target.value) : undefined
-                                    if (selectedId) {
-                                      const hyp: Tache = { ...task, testeurId: selectedId }
-                                      const c = getAssignmentConflict(selectedId, hyp, task.id)
-                                      if (c.hasConflict) {
-                                        alert(`⛔ "${getMemberName(selectedId)}" dépasserait ${MAX_HOURS_PER_DAY}h/jour\n\n${c.message}\n\n❌ Assignation refusée.`)
-                                        return
-                                      }
-                                    }
-                                    updateTask(phase.id, task.id, 'testeurId', selectedId)
-                                  }} 
-                                  className={`flex-1 px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#ef7c21] ${testConflict.hasConflict ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
-                                >
+                                <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                                <select value={task.testeurId || ''} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); updateTask(phase.id, task.id, 'testeurId', e.target.value ? parseInt(e.target.value) : undefined) }}
+                                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#ef7c21]">
                                   <option value="">Aucun testeur</option>
-                                  {teamMembers.map(m => {
-                                    const hyp: Tache = { ...task, testeurId: m.id }
-                                    const c = getAssignmentConflict(m.id, hyp, task.id)
-                                    const isChef = chefProjet && m.id === chefProjet.id
-                                    return (
-                                      <option key={m.id} value={m.id} disabled={c.hasConflict}>
-                                        {isChef ? '⭐ ' : ''}{m.nomComplet} - {m.role}
-                                        {isChef ? ' (Chef - recommandé)' : ''}
-                                        {c.hasConflict ? ` ⛔ dépasse ${MAX_HOURS_PER_DAY}h/j` : ''}
-                                      </option>
-                                    )
-                                  })}
+                                  {teamMembers.map(m => <option key={m.id} value={m.id}>{m.nomComplet}</option>)}
                                 </select>
                                 {chefProjet && task.testeurId !== chefProjet.id && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const hyp: Tache = { ...task, testeurId: chefProjet.id }
-                                      const c = getAssignmentConflict(chefProjet.id, hyp, task.id)
-                                      if (c.hasConflict) {
-                                        alert(`⚠️ Le chef de projet dépasserait ${MAX_HOURS_PER_DAY}h/jour sur cette tâche.`)
-                                      } else {
-                                        updateTask(phase.id, task.id, 'testeurId', chefProjet.id)
-                                      }
-                                    }}
-                                    className="text-xs text-[#ef7c21] hover:underline whitespace-nowrap shrink-0"
-                                    title="Réassigner au chef de projet"
-                                  >
-                                    <Star className="h-3 w-3 inline mr-1" />
-                                    Réassigner au chef
+                                  <button type="button" onClick={e => { e.stopPropagation(); updateTask(phase.id, task.id, 'testeurId', chefProjet.id) }}
+                                    className="text-xs text-[#ef7c21] hover:underline whitespace-nowrap shrink-0" title="Désigner le chef comme testeur">
+                                    <Star className="h-3 w-3 inline mr-1" />Chef
                                   </button>
                                 )}
                               </div>
                             </div>
 
                             <div className="flex gap-4 text-xs">
-                              <div className="flex items-center gap-1"><Calendar className="h-3 w-3 text-gray-400" /><input type="date" value={task.dateDebutPrevue} min={formData.dateDebut} max={formData.dateFinPrevue} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); updateTask(phase.id, task.id, 'dateDebutPrevue', e.target.value) }} className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white" /></div>
-                              <div className="flex items-center gap-1"><Calendar className="h-3 w-3 text-gray-400" /><input type="date" value={task.dateFinPrevue} min={formData.dateDebut} max={formData.dateFinPrevue} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); updateTask(phase.id, task.id, 'dateFinPrevue', e.target.value) }} className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white" /></div>
+                              <div className="flex items-center gap-1">
+                                <Calendar className="h-3 w-3 text-gray-400" />
+                                <input type="date" value={task.dateDebutPrevue} min={formData.dateDebut} max={formData.dateFinPrevue} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); updateTask(phase.id, task.id, 'dateDebutPrevue', e.target.value) }} className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white" />
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Calendar className="h-3 w-3 text-gray-400" />
+                                <input type="date" value={task.dateFinPrevue} min={formData.dateDebut} max={formData.dateFinPrevue} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); updateTask(phase.id, task.id, 'dateFinPrevue', e.target.value) }} className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white" />
+                              </div>
                             </div>
 
                             {hasNoSubTasks && <div className="mt-2 text-xs text-yellow-600 flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Au moins une sous-tâche est requise</div>}
-                            {feriesInTask.length > 0 && <div className="mt-2 text-xs text-orange-600 flex items-center gap-1"><CalendarOff className="h-3 w-3" /> {feriesInTask.length} jour(s) férié(s) : {feriesInTask.map(f => f.nom).join(', ')} — exclus du calcul</div>}
-                            {dailyContribution > MAX_HOURS_PER_DAY && <div className="mt-2 text-xs text-red-600 flex items-center gap-1"><Clock className="h-3 w-3" /> Charge de {dailyContribution.toFixed(1)}h/jour dépasse la limite de {MAX_HOURS_PER_DAY}h</div>}
+                            {feriesInTask.length > 0 && <div className="mt-2 text-xs text-orange-600 flex items-center gap-1"><CalendarOff className="h-3 w-3" /> {feriesInTask.length} férié(s) : {feriesInTask.map(f => f.nom).join(', ')}</div>}
+                            {dailyContribution > MAX_HOURS_PER_DAY && <div className="mt-2 text-xs text-red-600 flex items-center gap-1"><Clock className="h-3 w-3" /> Charge {dailyContribution.toFixed(1)}h/j &gt; {MAX_HOURS_PER_DAY}h</div>}
 
                             <div className="flex flex-col gap-1 mt-2 text-xs">
-                              {task.responsableId && respConflict.hasConflict && (
+                              {task.responsableId && hasRespConflict && (
                                 <div className="flex items-start gap-1 text-red-600 font-medium bg-red-50 px-2 py-1 rounded-lg border border-red-200">
-                                  <User className="h-3 w-3 shrink-0 mt-0.5" />
-                                  <span>Responsable : {getMemberName(task.responsableId)} — ⚠️ {respConflict.message}</span>
+                                  <User className="h-3 w-3 shrink-0 mt-0.5" /><span>Responsable : {getMemberName(task.responsableId)} — ⚠️ {respConflict.message}</span>
                                 </div>
                               )}
-                              {task.responsableId && !respConflict.hasConflict && (
+                              {task.responsableId && !hasRespConflict && (
                                 <div className="flex items-center gap-1 text-gray-600">
                                   <User className="h-3 w-3" /> Responsable : {getMemberName(task.responsableId)}
-                                  {required.length > 0 && (
-                                    <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${getMemberSkillMatch(teamMembers.find(m => m.id === task.responsableId)!, task) >= 80 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                                      {getMemberSkillMatch(teamMembers.find(m => m.id === task.responsableId)!, task)}% compétences
-                                    </span>
-                                  )}
+                                  {required.length > 0 && (() => { const m = teamMembers.find(m => m.id === task.responsableId); return m ? <span className={`ml-1 px-1.5 py-0.5 rounded-full ${getMemberSkillMatch(m, task) >= 80 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{getMemberSkillMatch(m, task)}% comp.</span> : null })()}
                                 </div>
                               )}
-
-                              {chefProjet && task.testeurId === chefProjet.id && !testConflict.hasConflict && (
+                              {task.testeurId && (
                                 <div className="flex items-center gap-1 text-gray-600">
-                                  <CheckCircle className="h-3 w-3" />
-                                  <span>Testeur : </span>
-                                  <span className="font-medium">{chefProjet.nomComplet}</span>
-                                  <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
-                                  <span className="text-xs text-gray-400">(par défaut)</span>
+                                  <CheckCircle className="h-3 w-3" /><span>Testeur : </span><span className="font-medium">{getMemberName(task.testeurId)}</span>
+                                  {chefProjet && task.testeurId === chefProjet.id && <><Star className="h-3 w-3 text-yellow-500 fill-yellow-500" /><span className="text-gray-400">(par défaut)</span></>}
                                 </div>
                               )}
-                              {task.testeurId && chefProjet && task.testeurId !== chefProjet.id && !testConflict.hasConflict && (
-                                <div className="flex items-center gap-1 text-gray-600">
-                                  <CheckCircle className="h-3 w-3" />
-                                  <span>Testeur : {getMemberName(task.testeurId)}</span>
-                                </div>
-                              )}
-                              {chefProjet && task.testeurId === chefProjet.id && testConflict.hasConflict && (
-                                <div className="flex items-center gap-1 text-red-600 font-medium bg-red-50 px-2 py-1 rounded-lg border border-red-200">
-                                  <CheckCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                  <span>Chef ({chefProjet.nomComplet}) : ⚠️ {testConflict.message}</span>
-                                </div>
-                              )}
-                              {!chefProjet && !task.testeurId && (
-                                <div className="flex items-center gap-1 text-orange-500">
-                                  <AlertCircle className="h-3 w-3" />
-                                  <span>Aucun testeur (ajoutez un chef de projet)</span>
-                                </div>
-                              )}
+                              {!chefProjet && !task.testeurId && <div className="flex items-center gap-1 text-orange-500"><AlertCircle className="h-3 w-3" /><span>Aucun testeur (ajoutez un chef)</span></div>}
                             </div>
                           </div>
 
@@ -2196,25 +2168,33 @@ export function EditProjectView({
                                   <div key={st.id} className={`flex items-center justify-between gap-3 p-3 rounded-lg group ${isValidated ? 'bg-green-50 border border-green-200' : 'bg-gray-50'}`}>
                                     <div className="flex-1 flex items-center gap-2">
                                       <div className={`w-1 h-6 rounded-full ${isValidated ? 'bg-green-500' : 'bg-[#ef7c21]'}`} />
-                                      <input type="text" value={st.titre} onChange={e => updateSubTask(phase.id, task.id, st.id, 'titre', e.target.value)} className={`flex-1 px-2 py-1 border rounded-lg text-sm bg-transparent focus:outline-none focus:border-[#ef7c21] ${isValidated ? 'border-green-200 text-gray-500 line-through' : 'border-transparent hover:border-gray-300'}`} placeholder="Sous-tâche" disabled={isValidated} />
+                                      <input type="text" value={st.titre} onChange={e => updateSubTask(phase.id, task.id, st.id, 'titre', e.target.value)}
+                                        className={`flex-1 px-2 py-1 border rounded-lg text-sm bg-transparent focus:outline-none focus:border-[#ef7c21] ${isValidated ? 'border-green-200 text-gray-500 line-through' : 'border-transparent hover:border-gray-300'}`}
+                                        placeholder="Sous-tâche" disabled={isValidated} />
                                     </div>
                                     <div className="flex items-center gap-2">
-                                      <input type="number" value={st.dureeEstimeeHeures} min="1" onChange={e => updateSubTask(phase.id, task.id, st.id, 'dureeEstimeeHeures', parseInt(e.target.value) || 0)} className={`w-20 px-2 py-1 border border-gray-200 rounded-lg text-xs ${isValidated ? 'bg-gray-100 text-gray-400' : 'bg-white'}`} disabled={isValidated} />
+                                      <input type="number" value={st.dureeEstimeeHeures} min="1" onChange={e => updateSubTask(phase.id, task.id, st.id, 'dureeEstimeeHeures', parseInt(e.target.value) || 0)}
+                                        className={`w-20 px-2 py-1 border border-gray-200 rounded-lg text-xs ${isValidated ? 'bg-gray-100 text-gray-400' : 'bg-white'}`} disabled={isValidated} />
                                       <span className="text-xs text-gray-500">h</span>
-                                      <select value={st.statut} onChange={e => updateSubTask(phase.id, task.id, st.id, 'statut', e.target.value)} className={`px-2 py-1 border border-gray-200 rounded-lg text-xs ${isValidated ? 'bg-green-50 text-green-700 font-medium' : 'bg-white'}`}>
+                                      <select value={st.statut} onChange={e => updateSubTask(phase.id, task.id, st.id, 'statut', e.target.value)}
+                                        className={`px-2 py-1 border border-gray-200 rounded-lg text-xs ${isValidated ? 'bg-green-50 text-green-700 font-medium' : 'bg-white'}`}>
                                         <option value="AFaire">À faire</option>
                                         <option value="EnCours">En cours</option>
                                         <option value="ATester">À tester</option>
                                         <option value="Validee">✅ Validée</option>
                                         <option value="Rejetee">Rejetée</option>
                                       </select>
-                                      {!isValidated && <button type="button" onClick={() => deleteSubTask(phase.id, task.id, st.id)} className="p-1 hover:bg-white rounded-lg text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100"><Trash2 className="h-3 w-3" /></button>}
+                                      {!isValidated && (
+                                        <button type="button" onClick={() => deleteSubTask(phase.id, task.id, st.id)}
+                                          className="p-1 hover:bg-white rounded-lg text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100"><Trash2 className="h-3 w-3" /></button>
+                                      )}
                                       {isValidated && <CheckCircle className="h-4 w-4 text-green-500" />}
                                     </div>
                                   </div>
                                 )
                               })}
-                              <button type="button" onClick={() => addSubTask(phase.id, task.id)} className="w-full py-2 border-2 border-dashed border-gray-200 rounded-lg text-xs text-gray-500 hover:border-[#ef7c21] hover:text-[#ef7c21] transition-colors flex items-center justify-center gap-1">
+                              <button type="button" onClick={() => addSubTask(phase.id, task.id)}
+                                className="w-full py-2 border-2 border-dashed border-gray-200 rounded-lg text-xs text-gray-500 hover:border-[#ef7c21] hover:text-[#ef7c21] transition-colors flex items-center justify-center gap-1">
                                 <Plus className="h-3 w-3" /> Ajouter une sous-tâche
                               </button>
                             </div>
@@ -2222,7 +2202,8 @@ export function EditProjectView({
                         </div>
                       )
                     })}
-                    <button type="button" onClick={() => addTask(phase.id)} className="w-full py-3 border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-500 hover:border-[#ef7c21] hover:text-[#ef7c21] transition-colors flex items-center justify-center gap-2">
+                    <button type="button" onClick={() => addTask(phase.id)}
+                      className="w-full py-3 border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-500 hover:border-[#ef7c21] hover:text-[#ef7c21] transition-colors flex items-center justify-center gap-2">
                       <Plus className="h-4 w-4" /> Ajouter une tâche
                     </button>
                   </div>
@@ -2232,16 +2213,19 @@ export function EditProjectView({
           </div>
         )}
 
+        {/* ── Boutons de soumission ── */}
         <div className="flex justify-end gap-3 pt-6 border-t border-gray-200">
           <Button type="button" variant="outline" onClick={onBack} className="border-gray-300 text-gray-700 hover:bg-gray-50">
             <X className="h-4 w-4 mr-2" /> Annuler
           </Button>
-          <Button type="submit" disabled={loading} className="bg-gradient-to-r from-[#ef7c21] to-[#ff9f4b] text-white hover:from-[#d95f0c] hover:to-[#ef7c21]">
+          <Button type="submit" disabled={loading}
+            className="bg-gradient-to-r from-[#ef7c21] to-[#ff9f4b] text-white hover:from-[#d95f0c] hover:to-[#ef7c21]">
             <Save className="h-4 w-4 mr-2" /> {loading ? 'Enregistrement...' : 'Enregistrer'}
           </Button>
         </div>
       </form>
 
+      {/* ── Modals ── */}
       <AIPlanningModal
         isOpen={showAIModal}
         onClose={() => setShowAIModal(false)}
@@ -2259,7 +2243,8 @@ export function EditProjectView({
             competences: employeCompetences.get(m.id) || m.specialites || [],
           })),
           joursFeries: joursFeries.map(jf => jf.date),
-          projetId: project?.id
+          projetId: project?.id,
+          model: selectedAIModel,
         }}
       />
 

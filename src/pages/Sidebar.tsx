@@ -1,3 +1,4 @@
+// Sidebar.tsx - Version définitive corrigée
 import React, { useState } from 'react'
 import {
   FolderKanban,
@@ -11,12 +12,15 @@ import {
   ChevronRight,
 } from 'lucide-react'
 
-export type ViewType = 'projects' | 'tasks' | 'timesheet' | 'performance'
+// ✅ Définition explicite du type
+export type ViewType = 'projects' | 'tasks' | 'calendrier' | 'performance'
+
 interface UserData {
   name: string
   email: string
   role: 'admin' | 'member'
 }
+
 interface SidebarProps {
   activeView: ViewType
   onViewChange: (view: ViewType) => void
@@ -26,6 +30,7 @@ interface SidebarProps {
   defaultCollapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
 }
+
 export function Sidebar({
   activeView,
   onViewChange,
@@ -36,7 +41,9 @@ export function Sidebar({
   onCollapsedChange,
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed)
-  const navItems = [
+  
+  // ✅ CORRECTION : Les IDs doivent correspondre EXACTEMENT au type ViewType
+  const navItems: { id: ViewType; label: string; icon: any }[] = [
     {
       id: 'projects',
       label: 'Projects',
@@ -48,7 +55,7 @@ export function Sidebar({
       icon: CheckSquare,
     },
     {
-      id: 'timesheet',
+      id: 'calendrier',  // ✅ Changé de 'timesheet' à 'calendrier'
       label: 'Calendrier',
       icon: Clock,
     },
@@ -57,7 +64,7 @@ export function Sidebar({
       label: 'Performance',
       icon: TrendingUp,
     },
-  ] as const
+  ]
   
   const toggleSidebar = () => {
     const newState = !isCollapsed
@@ -84,22 +91,21 @@ export function Sidebar({
       <aside
         className={`bg-white flex flex-col h-screen fixed left-0 top-0 z-10 font-['Poppins'] shadow-lg transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}
       >
-        {/* Header avec logo - VERSION AGRANDIE */}
+        {/* Header avec logo */}
         <div
           className={`h-20 flex items-center border-b border-gray-200 transition-all duration-300 ${
             isCollapsed ? 'justify-center px-0' : 'px-6'
           }`}
         >
           {isCollapsed ? (
-            // Quand la sidebar est fermée : Icône générique
             <Briefcase className="h-7 w-7 text-[#ef7c21] flex-shrink-0" />
           ) : (
-           <img
-  src="https://z-cdn-media.chatglm.cn/files/f95aa87a-1a5e-4c92-9365-b5db842cb0c5.png?auth_key=1876432345-51dbc54e1cc64042a6b855225769d34f-0-d9f4bbf9545d663555ea1d6f0769f10d"
-  alt="ITANIS Logo"
-  style={{ height: '80px', width: 'auto' }}
-  className="object-contain"
-/>
+            <img
+              src="https://z-cdn-media.chatglm.cn/files/f95aa87a-1a5e-4c92-9365-b5db842cb0c5.png?auth_key=1876432345-51dbc54e1cc64042a6b855225769d34f-0-d9f4bbf9545d663555ea1d6f0769f10d"
+              alt="ITANIS Logo"
+              style={{ height: '80px', width: 'auto' }}
+              className="object-contain"
+            />
           )}
         </div>
 
@@ -111,7 +117,7 @@ export function Sidebar({
             return (
               <button
                 key={item.id}
-                onClick={() => onViewChange(item.id as ViewType)}
+                onClick={() => onViewChange(item.id)}
                 className={`w-full flex items-center rounded-lg transition-all duration-200 group ${isCollapsed ? 'justify-center px-0 py-3' : 'px-3 py-2.5'} ${isActive ? 'bg-[#ef7c21]/10 text-[#ef7c21]' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
                 title={isCollapsed ? item.label : ''}
               >
@@ -128,7 +134,7 @@ export function Sidebar({
           })}
         </nav>
 
-        {/* Footer */}
+        {/* Footer - Notifications */}
         <div className="border-t border-gray-200">
           <div
             className={`border-b border-gray-200 ${isCollapsed ? 'px-2 py-4' : 'px-4 py-3'}`}
@@ -152,10 +158,9 @@ export function Sidebar({
             </div>
           </div>
 
+          {/* Footer - User info */}
           <div className={`p-4 ${isCollapsed ? 'px-2' : ''}`}>
-            <div
-              className={`flex items-center ${isCollapsed ? 'flex-col' : ''}`}
-            >
+            <div className={`flex items-center ${isCollapsed ? 'flex-col' : ''}`}>
               <div
                 className={`h-9 w-9 rounded-full bg-[#ef7c21]/10 flex items-center justify-center text-[#ef7c21] font-medium text-sm border border-[#ef7c21]/20 flex-shrink-0`}
               >

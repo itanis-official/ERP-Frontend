@@ -1,4 +1,3 @@
-// useNotifications.ts
 import { useEffect, useState, useCallback } from "react"
 import { getNotifications, markNotificationAsRead } from "./notificationService"
 import type { Notification } from "./notificationService"
@@ -37,14 +36,13 @@ export function useNotifications(employeId: number) {
         await markNotificationAsRead(n.id)
       }
     }
-    await fetchNotifications() // Rafraîchir après avoir tout marqué
+    await fetchNotifications() 
   }
 
   useEffect(() => {
     if (employeId) {
       fetchNotifications()
       
-      // Polling toutes les 10 secondes
       const interval = setInterval(() => {
         if (document.visibilityState === 'visible') {
           fetchNotifications()
@@ -55,7 +53,6 @@ export function useNotifications(employeId: number) {
     }
   }, [employeId, fetchNotifications])
 
-  // Rafraîchir quand la page devient visible
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && employeId) {

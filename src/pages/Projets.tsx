@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
@@ -516,18 +516,7 @@ export default function ProjectsView() {
               <Filter className="h-4 w-4" />
             </Button>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                fetchProjects()
-                fetchTypesProjet()
-              }}
-              disabled={refreshing}
-              className="border-gray-200"
-            >
-              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-            </Button>
+            
           </div>
         </div>
 
@@ -561,7 +550,7 @@ export default function ProjectsView() {
 
               {/* Filtre Budget */}
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget (DH)</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget </label>
                 <select
                   value={budgetFilter}
                   onChange={(e) => {
@@ -571,10 +560,10 @@ export default function ProjectsView() {
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21] bg-white"
                 >
                   <option value="all">Tous les budgets</option>
-                  <option value="< 50k">&lt; 50 000 DH</option>
-                  <option value="50k - 100k">50 000 - 100 000 DH</option>
-                  <option value="100k - 200k">100 000 - 200 000 DH</option>
-                  <option value="> 200k">&gt; 200 000 DH</option>
+                  <option value="< 50k">&lt; 50 000 </option>
+                  <option value="50k - 100k">50 000 - 100 000 </option>
+                  <option value="100k - 200k">100 000 - 200 000 </option>
+                  <option value="> 200k">&gt; 200 000 </option>
                 </select>
               </div>
 
