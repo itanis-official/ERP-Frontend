@@ -1,0 +1,39 @@
+# Étape 1 — Build
+# node:20-alpine → même version que le Dockerfile dev ✅
+# légère et rapide ✅
+FROM node:20-alpine AS build
+WORKDIR /app
+
+# copier package.json et package-lock.json en premier
+# → cache Docker optimisé ✅
+# → npm install ne relance que si
+#   ces fichiers changent ✅
+COPY package.json package-lock.json ./
+RUN npm install
+
+# copier le reste du code source ✅
+COPY . .
+
+# build de production → crée le dossier dist/ ✅
+# Vite compile tout en fichiers statiques
+# HTML + CSS + JS minifiés ✅
+RUN npm run build
+
+# Étape 2 — Production
+# nginx:alpine → sert les fichiers statiques ✅
+# image très légère ~30MB ✅
+# pas de code source dans l'image finale ✅
+FROM nginx:alpine
+
+# copier les fichiers buildés
+# depuis l'étape précédente ✅
+# dist/ → dossier par défaut de Vite ✅
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# nginx écoute sur port 80 ✅
+EXPOSE 80
+
+# démarrer nginx en mode foreground ✅
+# daemon off → nécessaire pour que
+# le container ne s'arrête pas ✅
+CMD ["nginx", "-g", "daemon off;"]
