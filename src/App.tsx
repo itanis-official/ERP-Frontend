@@ -1,4 +1,5 @@
-// App.tsx - Version complète avec persistance de session
+import { AuthProvider } from './app/contexts/AuthContext'
+import { AppRoutes } from './app/routes'
 import React, { useState, useEffect } from 'react'
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom"
 import { Sidebar } from './pages/Sidebar'
