@@ -14,10 +14,11 @@ RUN npm install
 # copier le reste du code source ✅
 COPY . .
 
-# build de production → crée le dossier dist/ ✅
-# Vite compile tout en fichiers statiques
+# vite build uniquement → skip tsc ✅
+# tsc est déjà vérifié par le job quality ✅
+# génère le dossier dist/ avec
 # HTML + CSS + JS minifiés ✅
-RUN npm run build
+RUN npx vite build
 
 # Étape 2 — Production
 # nginx:alpine → sert les fichiers statiques ✅
