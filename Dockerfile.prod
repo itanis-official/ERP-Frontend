@@ -1,7 +1,7 @@
 # Étape 1 — Build
 # node:20-alpine → même version que le Dockerfile dev ✅
 # légère et rapide ✅
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 
 # copier package.json et package-lock.json en premier
@@ -25,6 +25,10 @@ RUN npx vite build
 # image très légère ~30MB ✅
 # pas de code source dans l'image finale ✅
 FROM nginx:alpine
+
+# Fix Trivy HIGH vulnerability:
+# CVE-2026-27135 in nghttp2-libs
+RUN apk add --no-cache --upgrade 'nghttp2-libs>=1.68.1'
 
 # copier les fichiers buildés
 # depuis l'étape précédente ✅
