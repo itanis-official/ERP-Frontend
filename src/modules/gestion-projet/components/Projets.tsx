@@ -9,7 +9,7 @@ import {
   Grid, List, ChevronLeft, ChevronRight, ArrowUpDown, MapPin,
   TrendingUp, Filter, X,
 } from "lucide-react"
-import { getMesProjetsChef } from "../services/projectService"
+import { getMesProjetsChef,getAllProjets } from "../services/projectService"
 import { getTypesProjet, type TypeProjet } from "../services/typeProjetService"
 
 // ================= TYPES =================
@@ -189,11 +189,24 @@ export default function ProjectsView() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
   const [showFilters, setShowFilters] = useState(false)
 
-  // ================= FETCH =================
-  const fetchProjects = useCallback(async () => {
+   const fetchProjects = useCallback(async () => {
     try {
-      const data = await getMesProjetsChef()
-      setProjects((data as ApiProjet[]).map(mapProjectFromApi))
+      const userStr = localStorage.getItem('user');
+      const user = userStr ? JSON.parse(userStr) : null;
+      
+      const isAdmin = user && user.role === 'Admin';
+
+      let data;
+
+      if (isAdmin) {
+        console.log("Chargement de tous les projets (Admin)...");
+        data = await getAllProjets();
+      } else {
+        console.log("Chargement des projets du chef...");
+        data = await getMesProjetsChef();
+      }
+
+      setProjects((data as ApiProjet[]).map(mapProjectFromApi));
     } catch (e) {
       console.error("Erreur lors du chargement des projets:", e)
     } finally {

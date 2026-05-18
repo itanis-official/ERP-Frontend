@@ -1,4 +1,3 @@
-// services/projectService.ts - Version complète avec gestion du CDC
 import api from '../../../core/api/api'
 
 export const getMesProjetsChef = async () => {
@@ -30,7 +29,11 @@ export const getAvailableMembers = async () => {
   const response = await api.get("/Employes")
   return response.data
 }
-
+export const getAllProjets = async () => {
+  // Appel vers l'endpoint racine "Projets" que nous venons de créer
+  const response = await api.get("/Projets") 
+  return response.data
+}
 export interface ProjetMembre {
   id: number
   nom: string

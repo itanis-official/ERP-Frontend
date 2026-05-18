@@ -55,7 +55,7 @@ import {
   checkCdcExists,
 } from '../services/projectService'
 import { AIPlanningModal } from './Aiplanningmodal'
-import type { PhaseGeneree } from '../services/aiPlanningService'
+import type { PhaseGeneree, GeneratePlanningInput } from '../services/aiPlanningService'
 import {
   getCompetences,
   ajouterCompetence,
@@ -138,7 +138,7 @@ interface EditProjectViewProps {
 }
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
-
+const [cdcUrl, setCdcUrl] = useState<string | null>(null)
 const PHASE_TYPES: TypePhase[] = [
   'Analyse', 'Conception', 'MiseEnOeuvre', 'Validation', 'MiseEnService',
 ]
@@ -193,7 +193,7 @@ function mapEmployee(emp: ApiEmployee): TeamMember {
     phone: emp.telephone || emp.phone || '',
     specialites: emp.specialites || [],
     dateArrivee: emp.dateArrivee,
-    statut: emp.statut || 'actif',
+    statut: (emp.statut === 'actif' || emp.statut === 'inactif') ? emp.statut : 'actif',
   }
 }
 
@@ -282,7 +282,6 @@ export function EditProjectView({
   }, [teamMembers, chefEquipeId])
 
   // ==================== CHARGEMENT DES TYPES DE PROJET ====================
-  // Ref pour capturer la valeur initiale de typeProjet sans créer de dépendance
   const initialTypeProjetRef = React.useRef(formData.typeProjet)
 
   useEffect(() => {
@@ -439,7 +438,7 @@ export function EditProjectView({
   const loadEmployeCompetences = useCallback(async (employeId: number) => {
     try {
       const data = await getCompetencesByEmploye(employeId)
-      const skills = data.map(ec => ec.competenceNom)
+      const skills = data.map((ec: { competenceNom: string }) => ec.competenceNom)
       setEmployeCompetences(prev => new Map(prev).set(employeId, skills))
       return skills
     } catch (err) {
@@ -579,14 +578,14 @@ export function EditProjectView({
   const isSubTaskValidated = (statut: string) =>
     statut === 'Validee' || statut === 'validée' || statut === 'VALIDEE'
 
-  const getRemainingTaskHours = useCallback((task: Tache) =>
-    task.sousTaches.filter(st => !isSubTaskValidated(st.statut)).reduce((s, st) => s + st.dureeEstimeeHeures, 0)
+  const getRemainingTaskHours = useCallback((task: Tache): number =>
+    task.sousTaches.filter(st => !isSubTaskValidated(st.statut)).reduce((sum: number, st: SousTache) => sum + st.dureeEstimeeHeures, 0)
   , [])
 
-  const getValidatedSubTasksCount = (task: Tache) =>
+  const getValidatedSubTasksCount = (task: Tache): number =>
     task.sousTaches.filter(st => isSubTaskValidated(st.statut)).length
 
-  const isTaskFullyValidated = (task: Tache) =>
+  const isTaskFullyValidated = (task: Tache): boolean =>
     task.sousTaches.length > 0 && task.sousTaches.every(st => isSubTaskValidated(st.statut))
 
   const genId = () => Math.random().toString(36).substring(2, 11)
@@ -596,9 +595,9 @@ export function EditProjectView({
     return isNaN(p.getTime()) ? new Date().toISOString() : p.toISOString()
   }
 
-  const getMemberName = useCallback((id?: number) => teamMembers.find(m => m.id === id)?.nomComplet ?? '', [teamMembers])
+  const getMemberName = useCallback((id?: number): string => teamMembers.find(m => m.id === id)?.nomComplet ?? '', [teamMembers])
 
-  const formatDate = (dateStr: string) => {
+  const formatDate = (dateStr: string): string => {
     if (!dateStr) return 'Non définie'
     return new Date(dateStr).toLocaleDateString('fr-FR')
   }
@@ -676,7 +675,7 @@ export function EditProjectView({
         if (task.responsableId !== memberId) return
         const s = new Date(task.dateDebutPrevue), e = new Date(task.dateFinPrevue)
         if (date < s || date > e) return
-        const h = task.sousTaches.filter(st => !isSubTaskValidated(st.statut)).reduce((sum, st) => sum + st.dureeEstimeeHeures, 0)
+        const h = task.sousTaches.filter(st => !isSubTaskValidated(st.statut)).reduce((sum: number, st: SousTache) => sum + st.dureeEstimeeHeures, 0)
         const wd = Math.max(1, countWorkDays(s, e))
         total += h / wd
       })
@@ -687,7 +686,7 @@ export function EditProjectView({
   const getTaskDailyContribution = useCallback((task: Tache): number => {
     const s = new Date(task.dateDebutPrevue), e = new Date(task.dateFinPrevue)
     if (isNaN(s.getTime()) || isNaN(e.getTime())) return 0
-    const h = task.sousTaches.filter(st => !isSubTaskValidated(st.statut)).reduce((sum, st) => sum + st.dureeEstimeeHeures, 0)
+    const h = task.sousTaches.filter(st => !isSubTaskValidated(st.statut)).reduce((sum: number, st: SousTache) => sum + st.dureeEstimeeHeures, 0)
     const wd = Math.max(1, countWorkDays(s, e))
     return h / wd
   }, [countWorkDays])
@@ -777,12 +776,11 @@ export function EditProjectView({
     const fetchMultiProjectData = async () => {
       if (initialLoading) return
       try {
-        const [globalLoads, overloadedEmployees] = await Promise.all([
+        const [globalLoads] = await Promise.all([
           getAllLoads().catch(() => []),
           getOverloaded(MAX_HOURS_PER_DAY).catch(() => []),
         ])
         setLoads(globalLoads)
-        void overloadedEmployees // chargé pour usage futur
       } catch (error) {
         console.error("Erreur chargement données multi-projets:", error)
       }
@@ -796,7 +794,7 @@ export function EditProjectView({
         setInitialLoading(true)
         const [membersData, projectData, competencesData] = await Promise.all([
           getAvailableMembers(),
-          projectId && !propProject ? getProjetById(projectId) : Promise.resolve(propProject),
+          projectId && !propProject ? getProjetById(Number(projectId)) : Promise.resolve(propProject),
           getCompetences().catch(() => []),
         ])
         setAvailableMembers(membersData.map(mapEmployee))
@@ -810,32 +808,52 @@ export function EditProjectView({
             description: c.description,
           })))
         }
-        // compétences chargées
 
         if (projectData) {
           setProject(projectData)
 
-          const chefId = projectData.groupeEquipe?.chefEquipeId || projectData.groupeEquipe?.chefEquipe?.id || null
-          setChefEquipeId(chefId)
+          interface ApiProjectData {
+            id?: number | string
+            nom?: string
+            description?: string
+            client?: { id: number }
+            lieu?: string
+            dateDebut?: string
+            dateFinPrevue?: string
+            budgetEstime?: number
+            budgetReel?: number
+            typeProjet?: string
+            statut?: string
+            groupeEquipe?: {
+              chefEquipeId?: number
+              chefEquipe?: { id: number }
+              employes?: ApiEmployee[]
+            }
+            phases?: ApiPhase[]
+          }
+
+          const pd = projectData as ApiProjectData
+
+          const chefId = pd.groupeEquipe?.chefEquipeId || pd.groupeEquipe?.chefEquipe?.id || null
+          setChefEquipeId(chefId ?? null)
 
           setFormData({
-            nom: projectData.nom || '',
-            description: projectData.description || '',
-            clientId: projectData.client?.id?.toString() || '',
-            lieu: projectData.lieu || '',
-            dateDebut: projectData.dateDebut?.split('T')[0] || '',
-            dateFinPrevue: projectData.dateFinPrevue?.split('T')[0] || '',
-            budgetEstime: projectData.budgetEstime?.toString() || '',
-            budgetReel: projectData.budgetReel?.toString() || '',
-            typeProjet: projectData.typeProjet || (projectTypes.length > 0 ? projectTypes[0].value : 'Développement Web'),
-            statut: projectData.statut || 'Planifié',
+            nom: pd.nom || '',
+            description: pd.description || '',
+            clientId: pd.client?.id?.toString() || '',
+            lieu: pd.lieu || '',
+            dateDebut: pd.dateDebut?.split('T')[0] || '',
+            dateFinPrevue: pd.dateFinPrevue?.split('T')[0] || '',
+            budgetEstime: pd.budgetEstime?.toString() || '',
+            budgetReel: pd.budgetReel?.toString() || '',
+            typeProjet: pd.typeProjet || (projectTypes.length > 0 ? projectTypes[0].value : 'Développement Web'),
+            statut: (pd.statut as ProjectStatut) || 'Planifié',
           })
 
-          const projId = projectData.id || projectId
+          const projId = pd.id || projectId
           if (projId) {
-            checkCdcExists(parseInt(projId)).then(exists => {
+            checkCdcExists(Number(projId)).then(exists => {
               setCdcExists(exists)
-              if (exists) setCdcUrl(`/api/Projets/${projId}/cdc/download`)
             }).catch(() => {})
           }
 
@@ -849,7 +867,7 @@ export function EditProjectView({
             }>
           }
           const mappedPhases = PHASE_TYPES.map(type => {
-            const existing = projectData.phases?.find((p: ApiPhase) => p.typePhase === type)
+            const existing = pd.phases?.find((p: ApiPhase) => p.typePhase === type)
             return existing
               ? {
                   id: existing.id?.toString() || genId(),
@@ -878,7 +896,7 @@ export function EditProjectView({
           setPhases(mappedPhases)
           setExpandedPhases(mappedPhases.map(p => p.id))
 
-          const mappedTeam = projectData.groupeEquipe?.employes?.map(mapEmployee) || []
+          const mappedTeam = pd.groupeEquipe?.employes?.map(mapEmployee) || []
           setTeamMembers(mappedTeam)
           for (const member of mappedTeam) {
             await loadEmployeCompetences(member.id)
@@ -891,7 +909,8 @@ export function EditProjectView({
       }
     }
     init()
-  }, [projectId, propProject, loadEmployeCompetences, projectTypes])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, propProject, loadEmployeCompetences])
 
   useEffect(() => {
     const loadProjectHolidays = async () => {
@@ -917,7 +936,7 @@ export function EditProjectView({
     setIsUploadingCdc(true)
     setCdcUploadProgress(0)
     try {
-      const result = await uploadCdcFile(project.id, cdcFile, (progress) => setCdcUploadProgress(progress))
+      const result = await uploadCdcFile(Number(project.id), cdcFile, (progress) => setCdcUploadProgress(progress))
       setCdcUrl(result.fileUrl)
       setCdcExists(true)
       setCdcFile(null)
@@ -935,7 +954,7 @@ export function EditProjectView({
     if (!project?.id) return
     setIsDownloadingCdc(true)
     try {
-      await downloadCdcFile(project.id)
+      await downloadCdcFile(Number(project.id))
     } catch (err) {
       console.error('Erreur download CDC:', err)
       alert("❌ Erreur lors du téléchargement du fichier.")
@@ -949,7 +968,7 @@ export function EditProjectView({
     if (!window.confirm('Supprimer le cahier des charges ? Cette action est irréversible.')) return
     setIsDeletingCdc(true)
     try {
-      await deleteCdcFile(project.id)
+      await deleteCdcFile(Number(project.id))
       setCdcUrl(null)
       setCdcExists(false)
       setCdcFile(null)
@@ -1006,7 +1025,7 @@ export function EditProjectView({
           })),
         })),
       }
-      const updatedProject = await updateProjet(project.id, payload)
+      const updatedProject = await updateProjet(Number(project.id), payload)
       onSave?.(updatedProject)
       onBack()
     } catch (error) {
@@ -1020,7 +1039,7 @@ export function EditProjectView({
     if (teamMembers.some(m => m.id === member.id)) { alert("Déjà dans l'équipe"); return }
     setAddingMembers(true)
     try {
-      if (project?.id) await addProjectMembers(project.id, [member.id])
+      if (project?.id) await addProjectMembers(Number(project.id), [member.id])
       setTeamMembers([...teamMembers, member])
       await loadEmployeCompetences(member.id)
       setShowTeamSelector(false)
@@ -1035,7 +1054,7 @@ export function EditProjectView({
     if (!window.confirm(`Retirer ${member.nomComplet} ?`)) return
     setRemovingMemberId(id)
     try {
-      if (project?.id) await removeProjectMember(project.id, id)
+      if (project?.id) await removeProjectMember(Number(project.id), id)
       setTeamMembers(teamMembers.filter(m => m.id !== id))
       setEmployeCompetences(prev => { const n = new Map(prev); n.delete(id); return n })
     } catch { alert('Erreur suppression') }
@@ -1083,16 +1102,16 @@ export function EditProjectView({
         ...p,
         taches: p.taches.map(t => {
           if (t.id !== taskId) return t
-          const updated: Tache = { ...t, [field]: value }
+          const updated: Tache = { ...t, [field]: value as never }
           if (field === 'dateDebutPrevue' || field === 'dateFinPrevue') {
-            const nS = field === 'dateDebutPrevue' ? value : t.dateDebutPrevue
-            const nE = field === 'dateFinPrevue' ? value : t.dateFinPrevue
+            const nS = field === 'dateDebutPrevue' ? value as string : t.dateDebutPrevue
+            const nE = field === 'dateFinPrevue' ? value as string : t.dateFinPrevue
             if (nS && nE && !validateTaskDates(nS, nE)) return t
           }
           if (field === 'responsableId' && value) {
-            const c = getAssignmentConflict(value, updated, taskId)
+            const c = getAssignmentConflict(value as number, updated, taskId)
             if (c.hasConflict) {
-              alert(`⛔ RESPONSABLE "${getMemberName(value)}" dépasserait ${MAX_HOURS_PER_DAY}h/jour.\n${c.message}\n${c.suggestedAction ? '\n💡 ' + c.suggestedAction : ''}\n\n↩️ Assignation refusée.`)
+              alert(`⛔ RESPONSABLE "${getMemberName(value as number)}" dépasserait ${MAX_HOURS_PER_DAY}h/jour.\n${c.message}\n${c.suggestedAction ? '\n💡 ' + c.suggestedAction : ''}\n\n↩️ Assignation refusée.`)
               return t
             }
           }
@@ -1118,7 +1137,7 @@ export function EditProjectView({
 
   const updateSubTask = (phaseId: string, taskId: string, stId: string, field: string, value: unknown) => {
     setPhases(prev => prev.map(p => p.id === phaseId
-      ? { ...p, taches: p.taches.map(t => t.id === taskId ? { ...t, sousTaches: t.sousTaches.map(s => s.id === stId ? { ...s, [field]: value } : s) } : t) }
+      ? { ...p, taches: p.taches.map(t => t.id === taskId ? { ...t, sousTaches: t.sousTaches.map(s => s.id === stId ? { ...s, [field]: value as never } : s) } : t) }
       : p
     ))
   }
@@ -1156,7 +1175,7 @@ export function EditProjectView({
 
     const tachesParPhase = new Map<TypePhase, typeof aiPhases[0]['taches']>()
     PHASE_TYPES.forEach(t => tachesParPhase.set(t, []))
-    aiPhases.forEach(aiPhase => {
+    aiPhases.forEach((aiPhase: PhaseGeneree) => {
       if (!aiPhase?.taches) return
       const type = resolvePhaseType(aiPhase.typePhase)
       const existing = tachesParPhase.get(type) ?? []
@@ -1168,7 +1187,15 @@ export function EditProjectView({
       const aiTaches = tachesParPhase.get(type) ?? []
       const aiPhaseMatch = aiPhases.find(ap => resolvePhaseType(ap.typePhase) === type)
       const pct = aiPhaseMatch?.pourcentageBudget ?? existingPhase?.pourcentageBudget ?? Math.floor(100 / PHASE_TYPES.length)
-      const taches = aiTaches.map(aiTask => {
+      const taches = aiTaches.map((aiTask: {
+        titre?: string
+        dateDebutPrevue?: string
+        dateFinPrevue?: string
+        responsableId?: number
+        testeurId?: number
+        competencesRequises?: string[]
+        sousTaches?: Array<{ titre?: string; dureeEstimeeHeures?: number }>
+      }) => {
         if (!aiTask) return null
         return {
           id: genId(), titre: aiTask.titre || 'Tâche sans titre',
@@ -1177,7 +1204,7 @@ export function EditProjectView({
           statut: 'AFaire', responsableId: aiTask.responsableId ?? undefined,
           testeurId: chefProjet?.id ?? aiTask.testeurId ?? undefined,
           competencesRequises: aiTask.competencesRequises || [],
-          sousTaches: (aiTask.sousTaches || []).map(st => ({ id: genId(), titre: st.titre || 'Sous-tâche', dureeEstimeeHeures: st.dureeEstimeeHeures || 1, statut: 'AFaire' })),
+          sousTaches: (aiTask.sousTaches || []).map((st) => ({ id: genId(), titre: st.titre || 'Sous-tâche', dureeEstimeeHeures: st.dureeEstimeeHeures || 1, statut: 'AFaire' })),
         }
       }).filter(Boolean) as Tache[]
       return { id: existingPhase?.id || genId(), typePhase: type, pourcentageBudget: pct, statut: existingPhase?.statut || 'AFaire', taches }
@@ -1386,6 +1413,24 @@ export function EditProjectView({
   const selectedTypeIcon = getProjectTypeIcon(formData.typeProjet)
   const TypeIcon = selectedTypeIcon.icon
 
+  // Créer l'objet input pour AIPlanningModal
+  const aiPlanningInput: GeneratePlanningInput = {
+    projetNom: formData.nom,
+    projetDescription: formData.description,
+    typeProjet: formData.typeProjet,
+    dateDebut: formData.dateDebut,
+    dateFinPrevue: formData.dateFinPrevue,
+    budgetEstime: parseFloat(formData.budgetEstime) || 0,
+    equipeDisponible: teamMembers.map(m => ({
+      id: m.id,
+      nom: m.nomComplet,
+      competences: employeCompetences.get(m.id) || m.specialites || [],
+    })),
+    joursFeries: joursFeries.map(jf => jf.date),
+    projetId: project?.id ? Number(project.id) : undefined,
+    model: 'llama-3.1-8b-instant',
+  }
+
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-8">
       {/* ── Header ── */}
@@ -1500,24 +1545,24 @@ export function EditProjectView({
                       {(['Planifié', 'En cours', 'Terminé', 'Annulé'] as ProjectStatut[]).map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </div>
-                   <div>
+                  <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget estimé</label>
                     <input type="number" value={formData.budgetEstime} min="0" step="1000" required
                       onChange={e => setFormData({ ...formData, budgetEstime: e.target.value })}
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
                   </div>
-                         <div>
+                  <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Budget réel</label>
-                    <input type="number" value={formData.budgetReel} min="0" step="1000" placeholder="Optionnel"
+                    <input type="number" value={formData.budgetReel} placeholder="Optionnel (laisser vide si non défini)"
                       onChange={e => setFormData({ ...formData, budgetReel: e.target.value })}
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
                   </div>
-                     <div>
+                  <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Date de début</label>
                     <input type="date" value={formData.dateDebut} required onChange={e => setFormData({ ...formData, dateDebut: e.target.value })}
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
                   </div>
-                   <div>
+                  <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wider">Date de fin prévue</label>
                     <input type="date" value={formData.dateFinPrevue} required onChange={e => setFormData({ ...formData, dateFinPrevue: e.target.value })}
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
@@ -1530,10 +1575,6 @@ export function EditProjectView({
                         className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#ef7c21]" />
                     </div>
                   </div>
-                 
-           
-               
-                 
                 </div>
               </div>
             </Card>
@@ -1819,7 +1860,7 @@ export function EditProjectView({
                     </tbody>
                   </table>
                 </div>
-              </Card >
+              </Card>
             )}
           </div>
         )}
@@ -2241,22 +2282,7 @@ export function EditProjectView({
         isOpen={showAIModal}
         onClose={() => setShowAIModal(false)}
         onApply={applyAIPlanning}
-        input={{
-          projetNom: formData.nom,
-          projetDescription: formData.description,
-          typeProjet: formData.typeProjet,
-          dateDebut: formData.dateDebut,
-          dateFinPrevue: formData.dateFinPrevue,
-          budgetEstime: parseFloat(formData.budgetEstime) || 0,
-          equipeDisponible: teamMembers.map(m => ({
-            id: m.id,
-            nom: m.nomComplet,
-            competences: employeCompetences.get(m.id) || m.specialites || [],
-          })),
-          joursFeries: joursFeries.map(jf => jf.date),
-          projetId: project?.id,
-          model: 'llama-3.1-8b-instant',
-        }}
+        input={aiPlanningInput}
       />
 
       <MemberCompetenceModal />
@@ -2266,4 +2292,3 @@ export function EditProjectView({
 }
 
 export default EditProjectView
-

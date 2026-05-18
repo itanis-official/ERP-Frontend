@@ -35,7 +35,19 @@ export interface Commentaire {
   dateTest: string
 }
 
+export const getSubTasksByUser = async (userId: number, projectId?: number) => {
+  const params = new URLSearchParams();
+  if (projectId) params.append('projetId', projectId.toString());
+  
+  const url = `/SousTaches/utilisateur/${userId}${params.toString() ? '?' + params.toString() : ''}`;
+  const response = await api.get(url);
+  return response.data;
+};
 
+export const getAllEmployes = async () => {
+  const response = await api.get("/Employes"); 
+  return response.data;
+};
 export const getMySubTasks = async (projetId?: number): Promise<SubTaskFromApi[]> => {
   try {
     const params = projetId ? { projetId } : {}

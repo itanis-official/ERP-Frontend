@@ -22,9 +22,18 @@ import {
   Maximize2,
   Minimize2,
   RotateCcw,
+  Timer
 } from 'lucide-react'
-import { getMySubTasks, getTimeEntries, updateSubTaskStatus, getSubTaskComments, type SubTaskFromApi } from '../services/subTaskService'
-import { getMesProjetsMembre, type ProjetMembre } from '../services/projectService'
+import { 
+  getMySubTasks, 
+  getTimeEntries, 
+  updateSubTaskStatus, 
+  getSubTaskComments, 
+  getSubTasksByUser, 
+  getAllEmployes,   
+  type SubTaskFromApi 
+} from '../services/subTaskService'
+import { getMesProjetsMembre,getAllProjets, type ProjetMembre } from '../services/projectService'
 import { usePersistedTimer } from '../hooks/usePersistedTimer'
 
 type SubTaskStatus = 'À faire' | 'En cours' | 'À tester' | 'Validée' | 'Rejetée'
@@ -61,6 +70,13 @@ interface Tache {
   titre: string
   projetNom?: string
   projetCouleur?: string
+}
+
+// ✅ Interface simple pour les employés
+interface EmployeSimple {
+  id: number
+  nomComplet: string
+  email: string
 }
 
 type ViewMode = 'month' | 'week' | 'day'
@@ -180,6 +196,11 @@ export function CalendrierView() {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [pendingAction, setPendingAction] = useState<ConfirmationAction | null>(null)
 
+  // ✅ NOUVEAUX ÉTATS ADMIN
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const [allEmployes, setAllEmployes] = useState<EmployeSimple[]>([])
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
+
   // Données
   const [sousTaches, setSousTaches] = useState<SousTache[]>([])
   const [projets, setProjets] = useState<ProjetMembre[]>([])
@@ -195,15 +216,58 @@ export function CalendrierView() {
   const { activeTimer, timerSeconds: totalElapsedSeconds, startTimer, pauseTimer, resumeTimer, stopTimer } =
     usePersistedTimer(recordWorkTime)
 
-  // --- LOGIQUE MÉTIER ---
+    // ✅ MODIFICATION ICI : Chargement dynamique des projets selon le rôle
+  useEffect(() => {
+    const loadProjects = async () => {
+      try {
+        let projetsData: ProjetMembre[] = []
 
+        // Si l'utilisateur est Admin, on charge TOUS les projets
+        if (userRole === 'admin' || userRole === 'Admin') {
+          projetsData = await getAllProjets();
+        } else {
+          // Sinon, on charge uniquement les projets du membre
+          projetsData = await getMesProjetsMembre();
+        }
+
+        setProjets(projetsData);
+      } catch (err) {
+        console.error("Erreur chargement projets:", err);
+      }
+    };
+
+    // On ne charge que si on a déterminé le rôle
+    if (userRole) {
+      loadProjects();
+    }
+  }, [userRole]); 
+ 
+  useEffect(() => {
+   
+    const userStr = localStorage.getItem('user')
+    if (userStr) {
+      const user = JSON.parse(userStr)
+      setUserRole(user.role) 
+
+      if (user.role === 'admin' || user.role === 'Admin') {
+        getAllEmployes().then(setAllEmployes).catch(console.error)
+      }
+    }
+  }, []) 
   const refreshData = useCallback(async (showSpinner = false) => {
     if (isLoadingRef.current && showSpinner) return
     if (showSpinner) { isLoadingRef.current = true; setIsLoading(true) }
 
     try {
       const projectIdParam = filterProject !== 'all' ? parseInt(filterProject) : undefined
-      const data = await getMySubTasks(projectIdParam)
+      let data: SubTaskFromApi[]
+
+      if ((userRole === 'admin' || userRole === 'Admin') && selectedEmployeeId) {
+        console.log(`Chargement tâches pour employé ID: ${selectedEmployeeId}`)
+        data = await getSubTasksByUser(parseInt(selectedEmployeeId), projectIdParam)
+      } else {
+        data = await getMySubTasks(projectIdParam)
+      }
 
       const tasksWithDetails = await Promise.all(
         data.map(async (st: SubTaskFromApi) => {
@@ -262,7 +326,7 @@ export function CalendrierView() {
     } finally {
       if (showSpinner) { setIsLoading(false); isLoadingRef.current = false }
     }
-  }, [filterProject])
+  }, [filterProject, selectedEmployeeId, userRole]) // Ajout des dépendances Admin
 
   const updateTaskStatus = useCallback(async (subTaskId: string, newStatus: SubTaskStatus) => {
     if (isSubmitting) return
@@ -671,6 +735,28 @@ export function CalendrierView() {
             />
           </div>
 
+          {/* ✅ FILTRE EMPLOYÉ (ADMIN) */}
+          {(userRole === 'admin' || userRole === 'Admin') && (
+            <div className="min-w-[200px]">
+             
+              <select
+                value={selectedEmployeeId || "all"}
+                onChange={(e) => {
+                  const val = e.target.value
+                  setSelectedEmployeeId(val === "all" ? null : val)
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+              >
+                <option value="all">Mes tâches</option>
+                {allEmployes.map(emp => (
+                  <option key={emp.id} value={emp.id.toString()}>
+                    {emp.nomComplet}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="min-w-[180px]">
             <select
               value={filterProject}
@@ -1043,4 +1129,3 @@ export function CalendrierView() {
 }
 
 export default CalendrierView
-

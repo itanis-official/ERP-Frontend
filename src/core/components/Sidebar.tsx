@@ -1,4 +1,3 @@
-// Sidebar.tsx - Version définitive corrigée
 import React, { useState } from 'react'
 import {
   FolderKanban,
@@ -12,7 +11,6 @@ import {
   ChevronRight,
 } from 'lucide-react'
 
-// ✅ Définition explicite du type
 export type ViewType = 'projects' | 'tasks' | 'calendrier' | 'performance'
 
 interface UserData {
@@ -46,16 +44,16 @@ export function Sidebar({
   const navItems: { id: ViewType; label: string; icon: React.ElementType }[] = [
     {
       id: 'projects',
-      label: 'Projects',
+      label: 'Projets',
       icon: FolderKanban,
     },
     {
       id: 'tasks',
-      label: 'Tasks',
+      label: 'Tâches',
       icon: CheckSquare,
     },
     {
-      id: 'calendrier',  // ✅ Changé de 'timesheet' à 'calendrier'
+      id: 'calendrier',  
       label: 'Calendrier',
       icon: Clock,
     },
